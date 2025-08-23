@@ -125,7 +125,7 @@ app.post('/api/orders', async (req, res) => {
     ORDERS.set(id, { id, mid, tier, days, status: 'new' });
 
     const body = {
-      amount: 25000, // 250.00 UAH у копійках — змініть під свій тариф
+      amount: 100, // 250.00 UAH у копійках — змініть під свій тариф
       ccy: 980,
       merchantPaymInfo: {
         reference: id,
