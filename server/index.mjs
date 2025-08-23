@@ -3,10 +3,9 @@ import express from 'express';
 import cors from 'cors';
 import crypto from 'node:crypto';
 
-/**
- * ENV
- */
 const app = express();
+
+// ===== ENV =====
 const PORT = process.env.PORT || 8080;
 const ORIGIN = process.env.PUBLIC_ORIGIN || '*';
 const MONO_TOKEN = process.env.MONO_TOKEN;             // X-Token мерчанта Monobank
@@ -17,19 +16,15 @@ const PRIVATE_KEY_PEM = process.env.PRIVATE_KEY_PEM;   // Ed25519 PKCS#8 — Т�
 if (!MONO_TOKEN) console.warn('[ENV] MONO_TOKEN is missing');
 if (!PRIVATE_KEY_PEM) console.warn('[ENV] PRIVATE_KEY_PEM is missing');
 
+// CORS
 app.use(cors({ origin: ORIGIN }));
 
-/**
- * Дуже проста «БД» в памʼяті.
- * На проді: Redis/DB.
- */
+// ===== In-memory "DB" =====
 const ORDERS = new Map(); // id -> { id, mid, tier, days, status, license, invoiceId }
 
-/**
- * Утиліти
- */
+// ===== Utils =====
 const b64url = (buf) =>
-  Buffer.from(buf).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+  Buffer.from(buf).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/,'');
 
 function makeLicense({ mid, tier = 'pro', days = 365, sub = 'Duna Billiard Club' }) {
   const payload = { mid, tier, exp: Date.now() + days * 86400_000, iat: Date.now(), sub };
@@ -40,12 +35,11 @@ function makeLicense({ mid, tier = 'pro', days = 365, sub = 'Duna Billiard Club'
 
 function log(tag, obj) {
   const ts = new Date().toISOString();
-  console.log(`[${ts}] ${tag}`, obj ?? '');
+  if (obj !== undefined) console.log(`[${ts}] ${tag}`, obj);
+  else console.log(`[${ts}] ${tag}`);
 }
 
-/**
- * Кеш публічного ключа Monobank (щоб не тягнути на кожен webhook)
- */
+// ===== Monobank public key cache =====
 let monoPubkeyPem = null;
 let monoPubkeyExp = 0;
 async function getMonoPubkeyPem() {
@@ -56,19 +50,16 @@ async function getMonoPubkeyPem() {
     headers: { 'X-Token': MONO_TOKEN }
   });
   if (!resp.ok) {
-    const txt = await resp.text().catch(()=>'');
+    const txt = await resp.text().catch(() => '');
     throw new Error(`Failed to get Mono pubkey: ${resp.status} ${txt}`);
   }
-  const { key } = await resp.json(); // base64 of PEM string
+  const { key } = await resp.json(); // base64-encoded PEM string
   monoPubkeyPem = Buffer.from(key, 'base64').toString('utf8');
-  monoPubkeyExp = now + 60 * 60 * 1000; // 1 година
+  monoPubkeyExp = now + 60 * 60 * 1000; // 1 hour
   return monoPubkeyPem;
 }
 
-/**
- * WEBHOOK — ВАЖЛИВО: сире тіло (raw) ДО express.json()
- * Перевірка підпису X-Sign: ECDSA(SHA-256), ASN.1 DER у Base64
- */
+// ===== WEBHOOK (RAW BODY!) — ставимо ДО express.json() =====
 app.post('/api/mono/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   try {
     const bodyBuf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
@@ -87,7 +78,6 @@ app.post('/api/mono/webhook', express.raw({ type: 'application/json' }), async (
 
     const data = JSON.parse(bodyBuf.toString('utf8'));
 
-    // Структури вебхука можуть відрізнятись — намагаємось діставати максимально толерантно:
     const invoiceId =
       data.invoiceId ?? data?.data?.invoiceId ?? data?.invoice?.invoiceId ?? null;
     const status =
@@ -97,7 +87,6 @@ app.post('/api/mono/webhook', express.raw({ type: 'application/json' }), async (
 
     log('[WEBHOOK OK]', { invoiceId, status, reference });
 
-    // Знаходимо замовлення по reference (наш orderId) або по invoiceId
     const orderId = reference || [...ORDERS.values()].find(o => o.invoiceId === invoiceId)?.id;
     if (!orderId) {
       log('[WEBHOOK] Order not found for', { invoiceId, reference });
@@ -120,19 +109,13 @@ app.post('/api/mono/webhook', express.raw({ type: 'application/json' }), async (
   }
 });
 
-/**
- * ТІЛЬКИ після вебхука: загальний JSON-парсер для решти маршрутів
- */
+// ===== JSON parser — ПІСЛЯ вебхука! =====
 app.use(express.json({ limit: '1mb' }));
 
-/**
- * Alive-check
- */
+// Alive-check
 app.get('/', (_req, res) => res.send('Mono license server OK'));
 
-/**
- * 1) Створити інвойс Monobank (клієнт натискає "Купити онлайн")
- */
+// ===== Create order (Monobank invoice) =====
 app.post('/api/orders', async (req, res) => {
   try {
     const { mid, tier = 'pro', days = 365, email = '' } = req.body || {};
@@ -142,4 +125,83 @@ app.post('/api/orders', async (req, res) => {
     ORDERS.set(id, { id, mid, tier, days, status: 'new' });
 
     const body = {
-      amount: 25000, // 250.00 UAH у копійках
+      amount: 25000, // 250.00 UAH у копійках — змініть під свій тариф
+      ccy: 980,
+      merchantPaymInfo: {
+        reference: id,
+        destination: `Ліцензія ${tier.toUpperCase()} (${days} днів)`,
+        customerEmails: email ? [email] : []
+      },
+      redirectUrl: REDIRECT_URL,
+      webHookUrl: WEBHOOK_URL,
+      validity: 3600
+    };
+
+    const r = await fetch('https://api.monobank.ua/api/merchant/invoice/create', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Token': MONO_TOKEN },
+      body: JSON.stringify(body)
+    });
+
+    const j = await r.json();
+    if (!r.ok) {
+      log('[ORDER_CREATE FAIL]', { status: r.status, body: j });
+      return res.status(r.status).json(j);
+    }
+
+    const invoiceId = j.invoiceId;
+    const pageUrl = j.pageUrl;
+
+    const o = ORDERS.get(id);
+    if (o) o.invoiceId = invoiceId;
+    ORDERS.set(id, o);
+
+    log('[ORDER_CREATE OK]', { id, invoiceId, pageUrl });
+    return res.json({ ok: true, orderId: id, checkoutUrl: pageUrl });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ ok: false, error: 'ORDER_CREATE_FAILED' });
+  }
+});
+
+// ===== Poll order status / license =====
+app.get('/api/orders/:id', (req, res) => {
+  const o = ORDERS.get(req.params.id);
+  if (!o) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+  return res.json({ ok: true, id: o.id, status: o.status || 'new', license: o.license || null });
+});
+
+// ===== Manual refresh (fallback, якщо webhook загубився) =====
+app.post('/api/orders/:id/refresh', async (req, res) => {
+  try {
+    const o = ORDERS.get(req.params.id);
+    if (!o?.invoiceId) return res.status(404).json({ ok: false, error: 'NOT_FOUND' });
+
+    const r = await fetch('https://api.monobank.ua/api/merchant/invoice/status?invoiceId=' + o.invoiceId, {
+      headers: { 'X-Token': MONO_TOKEN }
+    });
+    const j = await r.json();
+    if (!r.ok) {
+      log('[STATUS FAIL]', { status: r.status, body: j });
+      return res.status(r.status).json(j);
+    }
+
+    const status =
+      j.status ?? j?.invoice?.status ?? (Array.isArray(j?.statuses) ? j.statuses[j.statuses.length - 1]?.status : undefined) ?? 'unknown';
+    o.status = status;
+
+    if (status === 'success' && !o.license) {
+      o.license = makeLicense({ mid: o.mid, tier: o.tier, days: o.days });
+      log('[LICENSE GENERATED via refresh]', { id: o.id });
+    }
+
+    ORDERS.set(o.id, o);
+    return res.json({ ok: true, status: o.status, license: o.license || null });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ ok: false, error: 'REFRESH_FAILED' });
+  }
+});
+
+// ===== START =====
+app.listen(PORT, () => console.log(`Mono server :${PORT}`));
