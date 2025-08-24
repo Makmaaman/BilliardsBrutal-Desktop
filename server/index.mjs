@@ -21,46 +21,36 @@ const BASE_URL   = process.env.BASE_URL || "";
 // ---------- APP ----------
 const app = express();
 
-// ✅ Важливо: ми за проксі (Render/Heroku/Cloudflare). Увімкнути довіру до X-Forwarded-*.
+// ✅ Render/Heroku/Cloudflare — ми за проксі, треба довіряти X-Forwarded-*
 app.set("trust proxy", 1);
 
-// базові мідлвари
+// мідлвари
 app.use(helmet());
 app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan("combined"));
 
-// rate-limit (після trust proxy!)
+// rate-limit (ПІСЛЯ trust proxy)
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 300,
     standardHeaders: true,
     legacyHeaders: false,
-    // Можна вказати власний генератор ключа IP (не обов’язково):
-    // keyGenerator: (req, _res) => req.ip,
+    // keyGenerator: (req) => req.ip, // не обов'язково
   })
 );
 
-// in-memory "БД" (на Render епізодична — цього достатньо)
+// in-memory "БД"
 const orders = new Map(); // id -> { id, machineId, tier, amount, invoiceId, pageUrl, status }
 
 // ---------- Допоміжне ----------
-
 async function getPrivateKey() {
   if (!PRIVATE_KEY_PEM) throw new Error("PRIVATE_KEY_PEM missing");
-  // jose очікує PKCS#8, openssl генерує Ed25519 OK
   return await importPKCS8(PRIVATE_KEY_PEM, "Ed25519");
 }
-
-function uahToKop(uah) {
-  const v = Number(uah);
-  return Math.round(v * 100);
-}
-
-function makeId() {
-  return crypto.randomUUID();
-}
+function uahToKop(uah) { return Math.round(Number(uah) * 100); }
+function makeId() { return crypto.randomUUID(); }
 
 async function signLicense({ machineId, tier = "pro", expiresAt = null }) {
   const pk = await getPrivateKey();
@@ -79,7 +69,6 @@ async function signLicense({ machineId, tier = "pro", expiresAt = null }) {
 
 async function monoCreateInvoice({ amountUAH, orderId }) {
   if (!MONO_TOKEN) {
-    // немає токену — офлайн режим для тесту
     const fakeInvoiceId = "TEST-" + orderId.slice(0, 8);
     const fakeUrl = "https://pay.monobank.ua/" + fakeInvoiceId;
     return { invoiceId: fakeInvoiceId, pageUrl: fakeUrl };
@@ -88,13 +77,10 @@ async function monoCreateInvoice({ amountUAH, orderId }) {
   const amount = uahToKop(amountUAH || 100); // копійки
   const payload = {
     amount,
-    // Якщо хочеш редірект назад у застосунок/сайт після оплати:
-    redirectUrl: BASE_URL ? `${BASE_URL}/paid/${orderId}` : undefined,
-    // merchantPaymentId — твій внутрішній id замовлення:
     merchantPaymentId: orderId,
-    // опис для платника:
     paymentType: "debit",
     reference: `Duna Billiard Club • Ліцензія`,
+    redirectUrl: BASE_URL ? `${BASE_URL}/paid/${orderId}` : undefined
   };
 
   const res = await fetch("https://api.monobank.ua/api/merchant/invoice/create", {
@@ -112,13 +98,11 @@ async function monoCreateInvoice({ amountUAH, orderId }) {
   }
 
   const data = await res.json();
-  // очікуємо { invoiceId, pageUrl, ... }
   return { invoiceId: data.invoiceId, pageUrl: data.pageUrl };
 }
 
 async function monoCheckInvoice(invoiceId) {
   if (!MONO_TOKEN) {
-    // без токена вважатимемо "не оплачено" — поки не потестиш
     return { status: "TEST_NO_TOKEN" };
   }
   const url = `https://api.monobank.ua/api/merchant/invoice/status?invoiceId=${encodeURIComponent(invoiceId)}`;
@@ -128,12 +112,10 @@ async function monoCheckInvoice(invoiceId) {
     throw new Error(`Mono status failed: ${res.status} ${txt}`);
   }
   const data = await res.json();
-  // у відповіді є поля: status, amount, ctime, payAddr, etc.
-  return data;
+  return data; // містить status/paidAmount/paidTime тощо
 }
 
 // ---------- ROUTES ----------
-
 app.get("/", (_req, res) => res.json({ ok: true, service: "billiards-license-mono" }));
 app.get("/api/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 
@@ -141,34 +123,23 @@ app.get("/api/license/public-key", (_req, res) => {
   res.json({ ok: !!PUBLIC_KEY_PEM, publicKey: PUBLIC_KEY_PEM || null });
 });
 
-// Статус ліцензії (на сервері це умовний ендпоінт — клієнт все одно перевіряє локально)
 app.get("/api/license/status", (req, res) => {
   const mid = String(req.query.mid || "");
   if (!mid) return res.status(400).json({ ok: false, error: "MISSING_MACHINE_ID" });
-  // Тут за бажанням можна зберігати видані ліцензії в БД і відповідати їхнім флагом.
   res.json({ ok: true, mid });
 });
 
-// Створити замовлення/інвойс
-// body: { machineId, tier }  ->  { id, invoiceId, pageUrl }
+// створити інвойс
 app.post("/api/orders", async (req, res) => {
   try {
     const { machineId, tier = "pro" } = req.body || {};
     if (!machineId) return res.status(400).json({ ok: false, error: "MISSING_MACHINE_ID" });
 
     const id = makeId();
-    const amountUAH = tier === "pro" ? 250 : 150; // приклад, відкоригуй тариф
+    const amountUAH = tier === "pro" ? 250 : 150; // під себе
     const { invoiceId, pageUrl } = await monoCreateInvoice({ amountUAH, orderId: id });
 
-    const record = {
-      id,
-      machineId,
-      tier,
-      amount: amountUAH,
-      invoiceId,
-      pageUrl,
-      status: "CREATED",
-    };
+    const record = { id, machineId, tier, amount: amountUAH, invoiceId, pageUrl, status: "CREATED" };
     orders.set(id, record);
 
     console.log(`[ORDER_CREATE OK]`, { id, invoiceId, pageUrl });
@@ -179,8 +150,7 @@ app.post("/api/orders", async (req, res) => {
   }
 });
 
-// Перевірити оплату та (за потреби) видати ліцензію
-// POST /api/orders/:id/refresh  ->  { ok, status, license? }
+// оновити статус, видати ліцензію якщо оплачено
 app.post("/api/orders/:id/refresh", async (req, res) => {
   try {
     const id = req.params.id;
@@ -192,7 +162,6 @@ app.post("/api/orders/:id/refresh", async (req, res) => {
 
     if (rec.invoiceId) {
       const st = await monoCheckInvoice(rec.invoiceId);
-      // У monobank можуть бути різні поля: перевір свою відповідь у логах
       status = st.status || (st.paidAmount ? "success" : "wait");
       paid = status?.toLowerCase?.() === "success" || !!st.paidAmount || !!st.paidTime;
     }
@@ -203,7 +172,6 @@ app.post("/api/orders/:id/refresh", async (req, res) => {
       return res.json({ ok: false, status: rec.status });
     }
 
-    // оплата є — випускаємо ліцензію, строк можна налаштувати
     const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000; // 1 рік
     const license = await signLicense({ machineId: rec.machineId, tier: rec.tier, expiresAt });
     rec.status = "PAID";
@@ -217,8 +185,7 @@ app.post("/api/orders/:id/refresh", async (req, res) => {
   }
 });
 
-// Пряма активація (якщо не через інвойс): видає ліцензію одразу
-// body: { machineId, tier, days } -> { ok, license }
+// пряма активація (без оплати, для тестів/ручної видачі)
 app.post("/api/license/activate", async (req, res) => {
   try {
     const { machineId, tier = "pro", days = 365 } = req.body || {};
