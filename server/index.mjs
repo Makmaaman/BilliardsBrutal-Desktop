@@ -1,280 +1,239 @@
-import 'dotenv/config';
-import express from 'express';
-import cors from 'cors';
-import helmet from 'helmet';
-import crypto from 'node:crypto';
-import { Pool } from 'pg';
+// server/index.mjs
+import express from "express";
+import cors from "cors";
+import helmet from "helmet";
+import morgan from "morgan";
+import rateLimit from "express-rate-limit";
+import crypto from "node:crypto";
+import { SignJWT, importPKCS8 } from "jose";
 
-/* ================== ENV ================== */
+// ---------- ENV ----------
+const PORT = Number(process.env.PORT || 10000);
+
+// приватний ключ Ed25519 (PEM). У Render часто з \n — нормалізуємо
+const PRIVATE_KEY_PEM = (process.env.PRIVATE_KEY_PEM || "").replace(/\\n/g, "\n");
+const PUBLIC_KEY_PEM  = (process.env.PUBLIC_KEY_PEM  || "").replace(/\\n/g, "\n");
+
+// monobank merchant API
+const MONO_TOKEN = process.env.MONO_TOKEN || "";
+const BASE_URL   = process.env.BASE_URL || "";
+
+// ---------- APP ----------
 const app = express();
-const PORT = process.env.PORT || 8080;
-const ORIGIN = process.env.PUBLIC_ORIGIN || '*';
-const MONO_TOKEN = process.env.MONO_TOKEN;
-const WEBHOOK_URL = process.env.WEBHOOK_URL;
-const REDIRECT_URL = process.env.REDIRECT_URL || 'https://example.com/payment-result';
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
-const DATABASE_URL = process.env.DATABASE_URL;
-const PRIVATE_KEY_PEM = (process.env.PRIVATE_KEY_PEM || '').includes('\\n')
-  ? process.env.PRIVATE_KEY_PEM.replace(/\\n/g, '\n')
-  : process.env.PRIVATE_KEY_PEM;
 
-if (!MONO_TOKEN) console.warn('[ENV] MONO_TOKEN is missing');
-if (!PRIVATE_KEY_PEM) console.warn('[ENV] PRIVATE_KEY_PEM is missing');
-if (!DATABASE_URL) console.warn('[ENV] DATABASE_URL is missing');
+// ✅ Важливо: ми за проксі (Render/Heroku/Cloudflare). Увімкнути довіру до X-Forwarded-*.
+app.set("trust proxy", 1);
 
-/* ================== SECURITY ================== */
-app.use(helmet({
-  contentSecurityPolicy: false, // CSP краще в рендерері; бек — API
-  crossOriginResourcePolicy: { policy: 'cross-origin' }
-}));
-app.use(cors({ origin: ORIGIN }));
+// базові мідлвари
+app.use(helmet());
+app.use(cors());
+app.use(express.json({ limit: "1mb" }));
+app.use(morgan("combined"));
 
-/* ===== РОЗБІР JSON ТІЛА — НИЖЧЕ ВЕБХУКА RAW! ===== */
+// rate-limit (після trust proxy!)
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    // Можна вказати власний генератор ключа IP (не обов’язково):
+    // keyGenerator: (req, _res) => req.ip,
+  })
+);
 
-/* ================== DB ================== */
-const pool = new Pool({ connectionString: DATABASE_URL });
+// in-memory "БД" (на Render епізодична — цього достатньо)
+const orders = new Map(); // id -> { id, machineId, tier, amount, invoiceId, pageUrl, status }
 
-async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS orders (
-      id UUID PRIMARY KEY,
-      order_token TEXT NOT NULL,
-      mid TEXT NOT NULL,
-      tier TEXT NOT NULL,
-      days INTEGER NOT NULL,
-      status TEXT NOT NULL,
-      invoice_id TEXT,
-      license TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-    CREATE INDEX IF NOT EXISTS idx_orders_invoice_id ON orders(invoice_id);
-  `);
-}
-initDb().then(()=>console.log('[DB] ready')).catch(e=>console.error('[DB] init error', e));
+// ---------- Допоміжне ----------
 
-/* ================== UTILS ================== */
-const b64url = (buf) =>
-  Buffer.from(buf).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
-
-function randToken(bytes = 24) {
-  return Buffer.from(crypto.randomBytes(bytes).toString('base64'))
-    .toString()
-    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+async function getPrivateKey() {
+  if (!PRIVATE_KEY_PEM) throw new Error("PRIVATE_KEY_PEM missing");
+  // jose очікує PKCS#8, openssl генерує Ed25519 OK
+  return await importPKCS8(PRIVATE_KEY_PEM, "Ed25519");
 }
 
-function nowIso() { return new Date().toISOString(); }
-
-function log(tag, obj) {
-  console.log(`[${nowIso()}] ${tag}`, obj ?? '');
+function uahToKop(uah) {
+  const v = Number(uah);
+  return Math.round(v * 100);
 }
 
-function makeLicense({ mid, tier='pro', days=365, sub='Duna Billiard Club' }) {
-  const payload = { mid, tier, exp: Date.now() + days*86400_000, iat: Date.now(), sub };
-  const txt = Buffer.from(JSON.stringify(payload));
-  const sig = crypto.sign(null, txt, PRIVATE_KEY_PEM); // Ed25519
-  return `${b64url(txt)}.${b64url(sig)}`;
+function makeId() {
+  return crypto.randomUUID();
 }
 
-/* ================== MONOBANK PUBKEY CACHE ================== */
-let monoPubkeyPem = null;
-let monoPubkeyExp = 0;
-async function getMonoPubkeyPem() {
-  const now = Date.now();
-  if (monoPubkeyPem && now < monoPubkeyExp) return monoPubkeyPem;
-  const resp = await fetch('https://api.monobank.ua/api/merchant/pubkey', {
-    headers: { 'X-Token': MONO_TOKEN }
+async function signLicense({ machineId, tier = "pro", expiresAt = null }) {
+  const pk = await getPrivateKey();
+  const jwt = await new SignJWT({
+    mid: machineId,
+    tier,
+    exp: expiresAt ? Math.floor(expiresAt / 1000) : undefined,
+  })
+    .setProtectedHeader({ alg: "EdDSA", typ: "JWT" })
+    .setIssuedAt()
+    .setIssuer("duna.billiard.license")
+    .setAudience("desktop-app")
+    .sign(pk);
+  return jwt;
+}
+
+async function monoCreateInvoice({ amountUAH, orderId }) {
+  if (!MONO_TOKEN) {
+    // немає токену — офлайн режим для тесту
+    const fakeInvoiceId = "TEST-" + orderId.slice(0, 8);
+    const fakeUrl = "https://pay.monobank.ua/" + fakeInvoiceId;
+    return { invoiceId: fakeInvoiceId, pageUrl: fakeUrl };
+  }
+
+  const amount = uahToKop(amountUAH || 100); // копійки
+  const payload = {
+    amount,
+    // Якщо хочеш редірект назад у застосунок/сайт після оплати:
+    redirectUrl: BASE_URL ? `${BASE_URL}/paid/${orderId}` : undefined,
+    // merchantPaymentId — твій внутрішній id замовлення:
+    merchantPaymentId: orderId,
+    // опис для платника:
+    paymentType: "debit",
+    reference: `Duna Billiard Club • Ліцензія`,
+  };
+
+  const res = await fetch("https://api.monobank.ua/api/merchant/invoice/create", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Token": MONO_TOKEN,
+    },
+    body: JSON.stringify(payload),
   });
-  if (!resp.ok) throw new Error(`Monobank pubkey ${resp.status}`);
-  const { key } = await resp.json();
-  monoPubkeyPem = Buffer.from(key, 'base64').toString('utf8');
-  monoPubkeyExp = now + 60*60*1000; // 1 година
-  return monoPubkeyPem;
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Mono create invoice failed: ${res.status} ${txt}`);
+  }
+
+  const data = await res.json();
+  // очікуємо { invoiceId, pageUrl, ... }
+  return { invoiceId: data.invoiceId, pageUrl: data.pageUrl };
 }
 
-/* ================== WEBHOOK (RAW) ДО JSON ================== */
-app.post('/api/mono/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  try {
-    const bodyBuf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
-    const xSign = req.header('X-Sign');
-    if (!xSign) return res.sendStatus(400);
-
-    const pubKeyPem = await getMonoPubkeyPem();
-    const ok = crypto.verify('sha256', bodyBuf, crypto.createPublicKey(pubKeyPem), Buffer.from(xSign, 'base64'));
-    if (!ok) {
-      log('[WEBHOOK] BAD SIGN');
-      return res.sendStatus(200); // відповідаємо 200, щоби Monobank не заспамив ретраями
-    }
-
-    const data = JSON.parse(bodyBuf.toString('utf8'));
-    const invoiceId = data.invoiceId ?? data?.data?.invoiceId ?? data?.invoice?.invoiceId ?? null;
-    const status    = data.status    ?? data?.data?.status    ?? data?.invoice?.status    ?? null;
-    const reference = data.reference ?? data?.data?.reference ?? data?.invoice?.reference ?? null;
-
-    log('[WEBHOOK OK]', { invoiceId, status, reference });
-
-    let order = null;
-    if (reference) {
-      const r = await pool.query('SELECT * FROM orders WHERE id = $1', [reference]);
-      order = r.rows[0] || null;
-    }
-    if (!order && invoiceId) {
-      const r = await pool.query('SELECT * FROM orders WHERE invoice_id = $1', [invoiceId]);
-      order = r.rows[0] || null;
-    }
-    if (!order) return res.sendStatus(200);
-
-    let license = order.license;
-    let newStatus = status || order.status;
-    if (newStatus === 'success' && !license) {
-      license = makeLicense({ mid: order.mid, tier: order.tier, days: order.days });
-      log('[LICENSE GENERATED]', { orderId: order.id });
-    }
-
-    await pool.query(
-      'UPDATE orders SET status = $1, license = $2, updated_at = NOW() WHERE id = $3',
-      [newStatus, license, order.id]
-    );
-
-    return res.sendStatus(200);
-  } catch (e) {
-    console.error('[WEBHOOK ERROR]', e);
-    return res.sendStatus(200); // 200, щоб Monobank не ретраїв до безкінечності
+async function monoCheckInvoice(invoiceId) {
+  if (!MONO_TOKEN) {
+    // без токена вважатимемо "не оплачено" — поки не потестиш
+    return { status: "TEST_NO_TOKEN" };
   }
+  const url = `https://api.monobank.ua/api/merchant/invoice/status?invoiceId=${encodeURIComponent(invoiceId)}`;
+  const res = await fetch(url, { headers: { "X-Token": MONO_TOKEN } });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`Mono status failed: ${res.status} ${txt}`);
+  }
+  const data = await res.json();
+  // у відповіді є поля: status, amount, ctime, payAddr, etc.
+  return data;
+}
+
+// ---------- ROUTES ----------
+
+app.get("/", (_req, res) => res.json({ ok: true, service: "billiards-license-mono" }));
+app.get("/api/health", (_req, res) => res.json({ ok: true, ts: Date.now() }));
+
+app.get("/api/license/public-key", (_req, res) => {
+  res.json({ ok: !!PUBLIC_KEY_PEM, publicKey: PUBLIC_KEY_PEM || null });
 });
 
-/* ===== JSON для решти маршрутів (після вебхука) ===== */
-app.use(express.json({ limit: '1mb' }));
+// Статус ліцензії (на сервері це умовний ендпоінт — клієнт все одно перевіряє локально)
+app.get("/api/license/status", (req, res) => {
+  const mid = String(req.query.mid || "");
+  if (!mid) return res.status(400).json({ ok: false, error: "MISSING_MACHINE_ID" });
+  // Тут за бажанням можна зберігати видані ліцензії в БД і відповідати їхнім флагом.
+  res.json({ ok: true, mid });
+});
 
-/* ================== RATE LIMITS ================== */
-import rateLimit from 'express-rate-limit';
-const rlCreate = rateLimit({ windowMs: 10*60*1000, max: 20, standardHeaders: true, legacyHeaders: false });
-const rlPoll   = rateLimit({ windowMs: 10*60*1000, max: 300, standardHeaders: true, legacyHeaders: false });
-
-/* ================== ROUTES ================== */
-
-// Alive
-app.get('/', (_req, res) => res.send('Mono license server OK'));
-
-// Create order
-app.post('/api/orders', rlCreate, async (req, res) => {
+// Створити замовлення/інвойс
+// body: { machineId, tier }  ->  { id, invoiceId, pageUrl }
+app.post("/api/orders", async (req, res) => {
   try {
-    const { mid, tier = 'pro', days = 365, email = '' } = req.body || {};
-    if (!mid) return res.status(400).json({ ok:false, error:'MID_REQUIRED' });
+    const { machineId, tier = "pro" } = req.body || {};
+    if (!machineId) return res.status(400).json({ ok: false, error: "MISSING_MACHINE_ID" });
 
-    const id = crypto.randomUUID();
-    const orderToken = randToken(24);
+    const id = makeId();
+    const amountUAH = tier === "pro" ? 250 : 150; // приклад, відкоригуй тариф
+    const { invoiceId, pageUrl } = await monoCreateInvoice({ amountUAH, orderId: id });
 
-    await pool.query(
-      `INSERT INTO orders (id, order_token, mid, tier, days, status)
-       VALUES ($1, $2, $3, $4, $5, 'new')`,
-      [id, orderToken, mid, tier, days]
-    );
-
-    const body = {
-      amount: 100, // 250.00 UAH у копійках — замініть під ваш тариф
-      ccy: 980,
-      merchantPaymInfo: {
-        reference: id,
-        destination: `Ліцензія ${tier.toUpperCase()} (${days} днів)`,
-        customerEmails: email ? [email] : []
-      },
-      redirectUrl: REDIRECT_URL,
-      webHookUrl: WEBHOOK_URL,
-      validity: 3600
+    const record = {
+      id,
+      machineId,
+      tier,
+      amount: amountUAH,
+      invoiceId,
+      pageUrl,
+      status: "CREATED",
     };
+    orders.set(id, record);
 
-    const r = await fetch('https://api.monobank.ua/api/merchant/invoice/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Token': MONO_TOKEN },
-      body: JSON.stringify(body)
-    });
-    const j = await r.json();
-    if (!r.ok) {
-      log('[ORDER_CREATE FAIL]', { status: r.status, body: j });
-      return res.status(r.status).json(j);
-    }
-
-    await pool.query(
-      'UPDATE orders SET invoice_id = $1, updated_at = NOW() WHERE id = $2',
-      [j.invoiceId, id]
-    );
-
-    log('[ORDER_CREATE OK]', { id, invoiceId: j.invoiceId, pageUrl: j.pageUrl });
-    return res.json({ ok:true, orderId: id, orderToken, checkoutUrl: j.pageUrl });
+    console.log(`[ORDER_CREATE OK]`, { id, invoiceId, pageUrl });
+    res.json({ ok: true, id, invoiceId, pageUrl });
   } catch (e) {
-    console.error('[ORDER_CREATE ERROR]', e);
-    res.status(500).json({ ok:false, error:'ORDER_CREATE_FAILED' });
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message || "CREATE_ORDER_FAILED" });
   }
 });
 
-// Helper: auth by order token
-async function authOrder(req, res) {
-  const id = req.params.id;
-  const token = req.header('x-order-token') || req.query.token;
-  const r = await pool.query('SELECT * FROM orders WHERE id = $1', [id]);
-  const o = r.rows[0];
-  if (!o) { res.status(404).json({ ok:false, error:'NOT_FOUND' }); return null; }
-  if (!token || token !== o.order_token) { res.status(403).json({ ok:false, error:'FORBIDDEN' }); return null; }
-  return o;
-}
-
-// Get order status/license (secure by token)
-app.get('/api/orders/:id', rlPoll, async (req, res) => {
-  const o = await authOrder(req, res); if (!o) return;
-  res.json({ ok:true, id:o.id, status:o.status, license:o.license || null });
-});
-
-// Manual refresh (fallback)
-app.post('/api/orders/:id/refresh', rlPoll, async (req, res) => {
-  const o = await authOrder(req, res); if (!o) return;
+// Перевірити оплату та (за потреби) видати ліцензію
+// POST /api/orders/:id/refresh  ->  { ok, status, license? }
+app.post("/api/orders/:id/refresh", async (req, res) => {
   try {
-    const r = await fetch('https://api.monobank.ua/api/merchant/invoice/status?invoiceId=' + o.invoice_id, {
-      headers: { 'X-Token': MONO_TOKEN }
-    });
-    const j = await r.json();
-    if (!r.ok) {
-      log('[STATUS FAIL]', { status: r.status, body: j });
-      return res.status(r.status).json(j);
-    }
-    const status = j.status ?? j?.invoice?.status ?? (Array.isArray(j?.statuses) ? j.statuses.at(-1)?.status : undefined) ?? 'unknown';
+    const id = req.params.id;
+    const rec = orders.get(id);
+    if (!rec) return res.status(404).json({ ok: false, error: "ORDER_NOT_FOUND" });
 
-    let license = o.license;
-    if (status === 'success' && !license) {
-      license = makeLicense({ mid: o.mid, tier: o.tier, days: o.days });
-      log('[LICENSE GENERATED via refresh]', { id: o.id });
+    let paid = false;
+    let status = "UNKNOWN";
+
+    if (rec.invoiceId) {
+      const st = await monoCheckInvoice(rec.invoiceId);
+      // У monobank можуть бути різні поля: перевір свою відповідь у логах
+      status = st.status || (st.paidAmount ? "success" : "wait");
+      paid = status?.toLowerCase?.() === "success" || !!st.paidAmount || !!st.paidTime;
     }
 
-    await pool.query(
-      'UPDATE orders SET status = $1, license = $2, updated_at = NOW() WHERE id = $3',
-      [status, license, o.id]
-    );
+    if (!paid) {
+      rec.status = status || "WAITING";
+      orders.set(id, rec);
+      return res.json({ ok: false, status: rec.status });
+    }
 
-    const r2 = await pool.query('SELECT status, license FROM orders WHERE id = $1', [o.id]);
-    const oo = r2.rows[0];
-    res.json({ ok:true, status: oo.status, license: oo.license || null });
+    // оплата є — випускаємо ліцензію, строк можна налаштувати
+    const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000; // 1 рік
+    const license = await signLicense({ machineId: rec.machineId, tier: rec.tier, expiresAt });
+    rec.status = "PAID";
+    rec.license = license;
+    orders.set(id, rec);
+
+    res.json({ ok: true, status: rec.status, license });
   } catch (e) {
-    console.error('[REFRESH ERROR]', e);
-    res.status(500).json({ ok:false, error:'REFRESH_FAILED' });
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message || "REFRESH_FAILED" });
   }
 });
 
-// Admin bind (re-issue license for a different mid) — protect with ADMIN_TOKEN
-app.post('/api/orders/:id/bind', async (req, res) => {
-  const token = req.header('x-admin-token') || req.query.token;
-  if (!ADMIN_TOKEN || token !== ADMIN_TOKEN) return res.status(403).json({ ok:false, error:'FORBIDDEN' });
-  const { mid } = req.body || {};
-  if (!mid) return res.status(400).json({ ok:false, error:'MID_REQUIRED' });
-
-  const r = await pool.query('SELECT * FROM orders WHERE id = $1', [req.params.id]);
-  const o = r.rows[0];
-  if (!o) return res.status(404).json({ ok:false, error:'NOT_FOUND' });
-  if (o.status !== 'success') return res.status(400).json({ ok:false, error:'NOT_PAID' });
-
-  const license = makeLicense({ mid, tier:o.tier, days:o.days });
-  await pool.query('UPDATE orders SET license = $1, mid = $2, updated_at = NOW() WHERE id = $3', [license, mid, o.id]);
-  res.json({ ok:true, license });
+// Пряма активація (якщо не через інвойс): видає ліцензію одразу
+// body: { machineId, tier, days } -> { ok, license }
+app.post("/api/license/activate", async (req, res) => {
+  try {
+    const { machineId, tier = "pro", days = 365 } = req.body || {};
+    if (!machineId) return res.status(400).json({ ok: false, error: "MISSING_MACHINE_ID" });
+    const expiresAt = Date.now() + Number(days) * 24 * 60 * 60 * 1000;
+    const license = await signLicense({ machineId, tier, expiresAt });
+    res.json({ ok: true, license });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message || "ACTIVATE_FAILED" });
+  }
 });
 
-/* ================== START ================== */
-app.listen(PORT, () => console.log(`Mono server :${PORT}`));
+// ---------- START ----------
+app.listen(PORT, () => {
+  console.log(`Mono server :${PORT}`);
+  console.log("     ==> Your service is live 🎉");
+});
