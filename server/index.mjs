@@ -125,7 +125,7 @@ app.post("/api/orders", async (req, res) => {
     if (!machineId) return res.status(400).json({ ok: false, error: "MISSING_MACHINE_ID" });
 
     const id = makeId();
-    const amountUAH = tier === "pro" ? 250 : 150; // під себе
+    const amountUAH = tier === "pro" ? 1 : 2; // під себе
     const { invoiceId, pageUrl } = await monoCreateInvoice({ amountUAH, orderId: id });
 
     const record = { id, machineId, tier, amount: amountUAH, invoiceId, pageUrl, status: "CREATED" };
