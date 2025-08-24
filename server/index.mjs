@@ -21,7 +21,7 @@ const BASE_URL   = process.env.BASE_URL || "";
 // ---------- APP ----------
 const app = express();
 
-// ✅ Render/Heroku/Cloudflare — ми за проксі, треба довіряти X-Forwarded-*
+// ✅ ми за проксі (Render/Heroku/Cloudflare) — довіряти X-Forwarded-*
 app.set("trust proxy", 1);
 
 // мідлвари
@@ -30,19 +30,18 @@ app.use(cors());
 app.use(express.json({ limit: "1mb" }));
 app.use(morgan("combined"));
 
-// rate-limit (ПІСЛЯ trust proxy)
+// rate-limit (після trust proxy)
 app.use(
   rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 300,
     standardHeaders: true,
     legacyHeaders: false,
-    // keyGenerator: (req) => req.ip, // не обов'язково
   })
 );
 
 // in-memory "БД"
-const orders = new Map(); // id -> { id, machineId, tier, amount, invoiceId, pageUrl, status }
+const orders = new Map(); // id -> { id, machineId, tier, amount, invoiceId, pageUrl, status, license? }
 
 // ---------- Допоміжне ----------
 async function getPrivateKey() {
@@ -73,7 +72,6 @@ async function monoCreateInvoice({ amountUAH, orderId }) {
     const fakeUrl = "https://pay.monobank.ua/" + fakeInvoiceId;
     return { invoiceId: fakeInvoiceId, pageUrl: fakeUrl };
   }
-
   const amount = uahToKop(amountUAH || 100); // копійки
   const payload = {
     amount,
@@ -82,37 +80,28 @@ async function monoCreateInvoice({ amountUAH, orderId }) {
     reference: `Duna Billiard Club • Ліцензія`,
     redirectUrl: BASE_URL ? `${BASE_URL}/paid/${orderId}` : undefined
   };
-
   const res = await fetch("https://api.monobank.ua/api/merchant/invoice/create", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Token": MONO_TOKEN,
-    },
+    headers: { "Content-Type": "application/json", "X-Token": MONO_TOKEN },
     body: JSON.stringify(payload),
   });
-
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`Mono create invoice failed: ${res.status} ${txt}`);
   }
-
   const data = await res.json();
   return { invoiceId: data.invoiceId, pageUrl: data.pageUrl };
 }
 
 async function monoCheckInvoice(invoiceId) {
-  if (!MONO_TOKEN) {
-    return { status: "TEST_NO_TOKEN" };
-  }
+  if (!MONO_TOKEN) return { status: "TEST_NO_TOKEN" };
   const url = `https://api.monobank.ua/api/merchant/invoice/status?invoiceId=${encodeURIComponent(invoiceId)}`;
   const res = await fetch(url, { headers: { "X-Token": MONO_TOKEN } });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`Mono status failed: ${res.status} ${txt}`);
   }
-  const data = await res.json();
-  return data; // містить status/paidAmount/paidTime тощо
+  return await res.json(); // містить status/paidAmount/paidTime тощо
 }
 
 // ---------- ROUTES ----------
