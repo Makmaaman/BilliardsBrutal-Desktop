@@ -127,7 +127,7 @@ app.post("/api/orders", async (req, res) => {
     if (!machineId) return res.status(400).json({ ok: false, error: "MISSING_MACHINE_ID" });
 
     // 💰 Сума за тарифом
-    const amountUAH = tier === "pro" ? 250 : 150;
+    const amountUAH = tier === "pro" ? 1 : 10;
 
     const id = makeId();
     const { invoiceId, pageUrl } = await monoCreateInvoice({ amountUAH, orderId: id });
