@@ -172,7 +172,7 @@ app.post('/api/orders', rlCreate, async (req, res) => {
     );
 
     const body = {
-      amount: 25000, // 250.00 UAH у копійках — замініть під ваш тариф
+      amount: 100, // 250.00 UAH у копійках — замініть під ваш тариф
       ccy: 980,
       merchantPaymInfo: {
         reference: id,
