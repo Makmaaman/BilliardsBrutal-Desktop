@@ -1,3 +1,58 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ===== Duna Billiard — premium table skin (global) ===== */
+
+html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+
+/* дерев'яна рамка */
+.wood-frame {
+  background: linear-gradient(180deg,#a56b38 0%, #8a5328 55%, #6a4020 100%);
+  box-shadow:
+    inset 0 2px 0 rgba(255,255,255,.18),
+    inset 0 -2px 0 rgba(0,0,0,.25),
+    0 10px 18px rgba(0,0,0,.25);
+}
+
+/* сукно з легкими концентричними візерунками */
+.felt-bg {
+  background:
+    radial-gradient(40% 35% at 70% 30%, rgba(255,255,255,.05), transparent 38%),
+    radial-gradient(36% 32% at 35% 70%, rgba(255,255,255,.04), transparent 45%),
+    repeating-radial-gradient(circle at 50% 50%,
+      rgba(0,0,0,.16) 0px, rgba(0,0,0,.16) 2px,
+      rgba(0,0,0,0) 2px, rgba(0,0,0,0) 9px
+    ),
+    linear-gradient(180deg,#0e6a55 0%, #0e5a47 55%, #0b4938 100%);
+}
+
+/* пульсуючий статус */
+.status-dot { position: relative; }
+.status-dot::after{
+  content:"";
+  position:absolute; inset:-6px;
+  border-radius:9999px;
+  border:2px solid currentColor;
+  opacity:.35;
+  animation: statusPing 1.8s cubic-bezier(0,0,0.2,1) infinite;
+}
+@keyframes statusPing {
+  0%   { transform: scale(0.6); opacity:.45; }
+  70%  { transform: scale(1.4); opacity:0; }
+  100% { transform: scale(1.4); opacity:0; }
+}
+
+/* ===== Анімаційна заміна тексту в кнопці Старт ⇄ Пауза ===== */
+.swap { position: relative; width: 100px; height: 1em; }
+.swap > span {
+  position: absolute; inset: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: transform .25s ease, opacity .25s ease;
+}
+.swap > .start { transform: translateY(0); opacity: 1; }
+.swap > .pause { transform: translateY(8px); opacity: 0; }
+[data-on="true"] .swap > .start { transform: translateY(-8px); opacity: 0; }
+[data-on="true"] .swap > .pause { transform: translateY(0); opacity: 1; }
+
+.felt-bg{ min-height:100%; }

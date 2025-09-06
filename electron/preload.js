@@ -1,18 +1,31 @@
 const { contextBridge, ipcRenderer } = require("electron");
 
-// Містки для існуючих функцій
-contextBridge.exposeInMainWorld("bb", {
-  httpGet: (url) => ipcRenderer.invoke("bb:httpGet", url),
-  print:   (payload) => ipcRenderer.invoke("bb:print", payload),
+contextBridge.exposeInMainWorld("versions", {
+  app: (() => { try { return ipcRenderer.sendSync("app:getVersionSync"); } catch { return "0.0.0"; } })(),
+  get: () => ipcRenderer.invoke("app:getVersion"),
 });
 
-// Події оновлень та виклики
 contextBridge.exposeInMainWorld("updates", {
-  on: (fn) => {
-    const listener = (_e, payload) => fn(payload);
-    ipcRenderer.on("updates:event", listener);
-    return () => ipcRenderer.removeListener("updates:event", listener);
+  on: (cb) => {
+    const l = (_e, payload) => cb && cb(payload);
+    ipcRenderer.on("license:event", l);
+    return () => ipcRenderer.removeListener("license:event", l);
   },
-  checkNow: () => ipcRenderer.invoke("updates:checkNow"),
-  quitAndInstall: () => ipcRenderer.invoke("updates:quitAndInstall")
+
+  getMachineId: () => ipcRenderer.invoke("license:getMachineId"),
+  getStatus:    () => ipcRenderer.invoke("license:getStatus"),
+  activate:     (b64) => ipcRenderer.invoke("license:activate", b64),
+  deactivate:   () => ipcRenderer.invoke("license:deactivate"),
+});
+
+contextBridge.exposeInMainWorld("license", {
+  getMachineId: () => ipcRenderer.invoke("license:getMachineId"),
+  getStatus:    () => ipcRenderer.invoke("license:getStatus"),
+  activate:     (b64) => ipcRenderer.invoke("license:activate", b64),
+  deactivate:   () => ipcRenderer.invoke("license:deactivate"),
+});
+
+contextBridge.exposeInMainWorld("bb", {
+  httpGet: (url) => ipcRenderer.invoke("bb:httpGet", url),
+  // print:  (payload) => ipcRenderer.invoke("bb:print", payload),
 });

@@ -1,101 +1,58 @@
 // electron/main.js
-const { app, BrowserWindow, ipcMain, session } = require("electron");
-const path = require("path");
-const { autoUpdater } = require("electron-updater");
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const path = require('node:path');
 
 let win;
 function createWindow() {
   win = new BrowserWindow({
     width: 1280,
-    height: 800,
+    height: 840,
+    show: true,
     webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
-      preload: path.join(__dirname, "preload.js"),
+      nodeIntegration: false,
+      sandbox: false,
     },
-    show: false,
   });
 
   const devUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devUrl) win.loadURL(devUrl);
-  else win.loadFile(path.join(__dirname, "../dist/index.html"));
-
-  win.once("ready-to-show", () => win.show());
-}
-
-/** --------------------------
- *   Автооновлення (GitHub)
- *  -------------------------- */
-autoUpdater.autoDownload = true;           // качає одразу
-autoUpdater.autoInstallOnAppQuit = true;   // встановлює при виході
-
-function wireAutoUpdateIPC() {
-  autoUpdater.on("checking-for-update", () =>
-    win.webContents.send("updates:event", { type: "checking" })
-  );
-  autoUpdater.on("update-available", (info) =>
-    win.webContents.send("updates:event", { type: "available", info })
-  );
-  autoUpdater.on("update-not-available", (info) =>
-    win.webContents.send("updates:event", { type: "not-available", info })
-  );
-  autoUpdater.on("download-progress", (p) =>
-    win.webContents.send("updates:event", { type: "progress", p })
-  );
-  autoUpdater.on("update-downloaded", (info) =>
-    win.webContents.send("updates:event", { type: "downloaded", info })
-  );
-  autoUpdater.on("error", (err) =>
-    win.webContents.send("updates:event", { type: "error", message: err?.message || String(err) })
-  );
-
-  // ручна перевірка з Renderer
-  ipcMain.handle("updates:checkNow", async () => {
-    try { await autoUpdater.checkForUpdates(); return { ok: true }; }
-    catch (e) { return { ok: false, error: e?.message || String(e) }; }
-  });
-
-  // встановити зараз (після 'update-downloaded')
-  ipcMain.handle("updates:quitAndInstall", () => {
-    autoUpdater.quitAndInstall(false, true);
-  });
-}
-
-/** --------------------------
- *   Твої існуючі IPC-містки
- *  -------------------------- */
-ipcMain.handle("bb:httpGet", async (_e, url) => {
-  const res = await fetch(url, { method: "GET", cache: "no-store" }).catch(() => null);
-  if (!res) return { ok: false, status: 0, statusText: "NETWORK_ERROR", text: "" };
-  const text = await res.text().catch(() => "");
-  return { ok: res.ok, status: res.status, statusText: res.statusText, text };
-});
-
-// Під далі, якщо маєш друк:
-// ipcMain.handle("bb:print", async (_e, { host, data }) => {
-//   return { ok: true };
-// });
-
-/** --------------------------
- *   Старт застосунку
- *  -------------------------- */
-app.whenReady().then(() => {
-  createWindow();
-  wireAutoUpdateIPC();
-
-  // (опційно) CORS у дев-режимі
-  if (!app.isPackaged) {
-    session.defaultSession.webRequest.onHeadersReceived((details, cb) => {
-      cb({ responseHeaders: {
-        ...details.responseHeaders,
-        "Access-Control-Allow-Origin": ["*"],
-        "Access-Control-Allow-Headers": ["*"],
-      }});
-    });
+  if (devUrl) {
+    win.loadURL(devUrl);
+    win.webContents.openDevTools({ mode: 'detach' });
+  } else {
+    // ВАЖЛИВО: правильний шлях до Vite-збірки
+    win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
   }
 
-  // автоперевірка через 3с
-  setTimeout(() => autoUpdater.checkForUpdatesAndNotify().catch(() => {}), 3000);
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    shell.openExternal(url);
+    return { action: 'deny' };
+  });
+}
+
+/* ---------- IPC: версія, ліцензія (заглушка), ESP-проксі ---------- */
+ipcMain.on('app:getVersionSync', (e) => (e.returnValue = app.getVersion()));
+ipcMain.handle('app:getVersion', () => app.getVersion());
+
+ipcMain.handle('license:getStatus', async () => ({
+  ok: true, tier: 'dev', features: ['all'], expiresAt: null,
+}));
+
+// Проксі GET для ESP (через Node fetch, без CORS)
+ipcMain.handle('esp:get', async (_e, url, { timeout = 5000 } = {}) => {
+  try {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), timeout);
+    const res = await fetch(url, { method: 'GET', cache: 'no-store', signal: controller.signal });
+    const text = await res.text().catch(() => '');
+    clearTimeout(t);
+    return { ok: res.ok, status: res.status, statusText: res.statusText, text };
+  } catch (e) {
+    return { ok: false, status: 0, statusText: String(e?.message || e), text: '' };
+  }
 });
 
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
-app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+app.whenReady().then(createWindow);
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
