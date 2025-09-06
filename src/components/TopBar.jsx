@@ -1,47 +1,67 @@
-import React, { useRef } from "react";
-import { money } from "../utils/format";
-import { makeBase } from "../services/esp";
+// src/components/TopBar.jsx
+import React from "react";
 
-export default function TopBar({ session, tariff, espIP, shift, onOpenMenu }) {
-  const ref = useRef(null);
+/** Універсальний чіп */
+function Chip({ icon, tone = "slate", children }) {
+  const toneMap = {
+    slate: "bg-white text-slate-800 ring-slate-200",
+    green: "bg-emerald-50 text-emerald-800 ring-emerald-200",
+    blue:  "bg-sky-50 text-sky-800 ring-sky-200",
+    gold:  "bg-amber-50 text-amber-800 ring-amber-200",
+    red:   "bg-rose-50 text-rose-800 ring-rose-200",
+  };
   return (
-    <header className="sticky top-0 z-10 border-b border-emerald-100 bg-white/85 backdrop-blur">
-      <div className="max-w-7xl mx-auto px-4 py-3 grid grid-cols-12 gap-3 items-center">
-        <div className="col-span-12 md:col-span-4 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-full grid place-items-center shadow-md"
-               style={{ background: "linear-gradient(180deg,#10b981,#065f46)", color:"#fff", fontWeight:700 }}>DB</div>
-          <div className="leading-tight">
-            <div className="font-semibold text-xl">Duna Billiard Club</div>
-            <div className="text-xs text-slate-500">десктоп‑керування столами</div>
-          </div>
-        </div>
+    <span className={`inline-flex items-center gap-2 h-8 px-3 rounded-full ring-1 shadow-sm ${toneMap[tone]}`}>
+      {icon && <span className="text-base leading-none">{icon}</span>}
+      <span className="text-sm">{children}</span>
+    </span>
+  );
+}
 
-        <div className="col-span-12 md:col-span-5 flex flex-wrap gap-2">
-          <div className="px-3 py-1 rounded-full text-xs bg-emerald-50 border border-emerald-200 text-emerald-700">
-            Користувач: <b>{session.username}</b> ({session.role})
-          </div>
-          <div className="px-3 py-1 rounded-full text-xs bg-emerald-50 border border-emerald-200 text-emerald-700">
-            Тариф (база): <b>{money(tariff)}/год</b>
-          </div>
-          <div className="px-3 py-1 rounded-full text-xs bg-emerald-50 border border-emerald-200 text-emerald-700">
-            ESP: <b>{makeBase(espIP)}</b>
-          </div>
-          {shift ? (
-            <div className="px-3 py-1 rounded-full text-xs bg-emerald-100 border border-emerald-200 text-emerald-900">
-              Зміна відкрита • {new Date(shift.openedAt).toLocaleTimeString()} • {shift.openedBy}
+export default function TopBar({
+  user, role, version, baseRate,
+  espIp, espOnline = true, licenseInfo,
+  liveBadge,
+  onOpenMenu, onAddTable, onRemoveTable, onFeedback
+}) {
+  return (
+    <header className="sticky top-0 z-40 bg-white/75 backdrop-blur border-b border-slate-200">
+      <div className="max-w-7xl mx-auto px-4 py-2">
+        <div className="flex flex-wrap md:flex-nowrap items-center gap-3">
+          {/* Ліва частина */}
+          <div className="flex-1 min-w-[280px]">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 rounded-full bg-emerald-600 text-white grid place-items-center font-semibold">DB</div>
+              <div>
+                <div className="font-semibold leading-tight">Duna Billiard Club</div>
+                {liveBadge && <div className="text-[11px] text-emerald-700 leading-tight">{liveBadge}</div>}
+              </div>
             </div>
-          ) : (
-            <div className="px-3 py-1 rounded-full text-xs bg-red-50 border border-red-200 text-red-700">
-              Зміна закрита — запуск заборонено
-            </div>
-          )}
-        </div>
 
-        <div className="col-span-12 md:col-span-3 flex md:justify-end">
-          <button ref={ref} className="px-4 py-2 rounded-xl shadow-sm border text-sm font-medium bg-black text-white border-black"
-                  onClick={(e)=>onOpenMenu((ref.current||e.currentTarget).getBoundingClientRect())}>
-            Меню
-          </button>
+            {/* Статуси */}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Chip icon="👤">Користувач: <b className="font-medium">{user}</b> ({role})</Chip>
+              <Chip icon="🏷️">Версія: <b className="font-medium">{(version||"")}</b></Chip>
+              <Chip icon="🧩" tone={espOnline ? "green" : "red"}>
+                ESP: <b className="font-medium">{espIp}</b> • {espOnline ? "online" : "offline"}
+              </Chip>
+              <Chip icon="🔒" tone="gold">Ліцензія: {licenseInfo?.tier || "—"}</Chip>
+              <Chip icon="💰" tone="blue">Тариф (база): <b className="font-medium">₴{Number(baseRate||0).toFixed(2)}/год</b></Chip>
+            </div>
+          </div>
+
+          {/* Праворуч — дії */}
+          <div className="ml-auto flex items-center gap-2">
+            <button className="h-9 px-3 rounded-lg bg-sky-600 text-white hover:brightness-110" onClick={onFeedback}>Відгук</button>
+            <button className="h-9 px-3 rounded-lg bg-emerald-600 text-white hover:brightness-110" onClick={onAddTable}>+ Стіл</button>
+            <button className="h-9 px-3 rounded-lg bg-rose-600 text-white hover:brightness-110" onClick={onRemoveTable}>− Стіл</button>
+            <button
+              className="h-9 px-3 rounded-lg bg-slate-900 text-white hover:brightness-110"
+              onClick={(e)=> onOpenMenu?.(e.currentTarget.getBoundingClientRect())}
+            >
+              ☰ Меню
+            </button>
+          </div>
         </div>
       </div>
     </header>
