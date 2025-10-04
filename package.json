@@ -1,0 +1,66 @@
+{
+  "name": "billiards-brutal-desktop",
+  "productName": "Duna Billiard Club",
+  "version": "3.6.6",
+  "description": "Billiards Brutal — desktop (Electron + Vite + React)",
+  "author": "Makma",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://localhost:5173 electron .\"",
+    "build:web": "vite build",
+    "build:desktop": "npm run build:web && electron-builder -w --publish never",
+    "release:win": "npm run build:web && electron-builder -w --publish always",
+    "release": "npm run release:win"
+  },
+  "dependencies": {
+    "electron-updater": "^6.6.2",
+    "framer-motion": "^12.23.21",
+    "jose": "^5.2.0",
+    "pg": "^8.11.3",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.1",
+    "autoprefixer": "^10.4.20",
+    "concurrently": "^9.0.1",
+    "cross-env": "^7.0.3",
+    "electron": "^30.5.1",
+    "electron-builder": "^24.13.3",
+    "postcss": "^8.4.45",
+    "tailwindcss": "^3.4.9",
+    "vite": "^5.4.1",
+    "wait-on": "^8.0.0"
+  },
+  "build": {
+    "appId": "club.duna.billiards",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "electron/**",
+      "package.json"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Makmaaman",
+        "repo": "BilliardsBrutal-Desktop",
+        "releaseType": "release"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "artifactName": "DunaBilliardClub-${version}.exe"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
