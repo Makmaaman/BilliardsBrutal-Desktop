@@ -1,0 +1,155 @@
+--- a/src/components/TopBar.jsx+++ b/src/components/TopBar.jsx@@ -1,8 +1,8 @@ // src/components/TopBar.jsx
+ import React from "react";
+ 
+-/** Універсальний чіп */
+-function Chip({ icon, tone = "slate", children }) {
++/** Універсальний чіп (без переповнення) */
++function Chip({ icon, tone = "slate", children, title }) {
+   const toneMap = {
+     slate: "bg-white text-slate-800 ring-slate-200",
+     green: "bg-emerald-50 text-emerald-800 ring-emerald-200",
+@@ -11,56 +11,108 @@     red:   "bg-rose-50 text-rose-800 ring-rose-200",
+   };
+   return (
+-    <span className={`inline-flex items-center gap-2 h-8 px-3 rounded-full ring-1 shadow-sm ${toneMap[tone]}`}>
+-      {icon && <span className="text-base leading-none">{icon}</span>}
+-      <span className="text-sm">{children}</span>
++    <span
++      title={title}
++      className={`inline-flex items-center gap-2 h-8 px-3 rounded-full ring-1 shadow-sm whitespace-nowrap ${toneMap[tone]}`}
++    >
++      {icon && <span className="text-base leading-none shrink-0">{icon}</span>}
++      <span className="text-sm min-w-0 truncate">{children}</span>
+     </span>
+   );
+ }
+ 
++/** TopBar — безпечний по ширині, адаптивний, зберігає твою логіку */
+ export default function TopBar({
+-  user, role, version, baseRate,
+-  espIp, espOnline = true, licenseInfo,
++  user,
++  role,
++  baseRate,
++  espIp,
++  espOnline,
++  licenseInfo,
++  version,
+   liveBadge,
+-  onOpenMenu, onAddTable, onRemoveTable, onFeedback
++  onOpenMenu,
++  onAddTable,
++  onRemoveTable,
++  onFeedback
+ }) {
+   return (
+-    <header className="sticky top-0 z-40 bg-white/75 backdrop-blur border-b border-slate-200">
+-      <div className="max-w-7xl mx-auto px-4 py-2">
+-        <div className="flex flex-wrap md:flex-nowrap items-center gap-3">
+-          {/* Ліва частина */}
+-          <div className="flex-1 min-w-[280px]">
+-            <div className="flex items-center gap-3">
+-              <div className="w-9 h-9 rounded-full bg-emerald-600 text-white grid place-items-center font-semibold">DB</div>
+-              <div>
+-                <div className="font-semibold leading-tight">Duna Billiard Club</div>
+-                {liveBadge && <div className="text-[11px] text-emerald-700 leading-tight">{liveBadge}</div>}
+-              </div>
++    <header className="sticky top-0 z-50 border-b border-white/40 bg-white/70 backdrop-blur">
++      <div className="mx-auto max-w-screen-2xl px-3 sm:px-4">
++        {/* Рядок: переноситься за потреби, без переповнення */}
++        <div className="flex flex-wrap items-center gap-3 py-2">
++          {/* Бренд + службові чіпи */}
++          <div className="flex min-w-0 flex-1 items-center gap-3">
++            {/* Лого */}
++            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-900 text-white shadow">
++              <span className="text-lg font-semibold">DB</span>
+             </div>
+ 
+-            {/* Статуси */}
+-            <div className="mt-2 flex flex-wrap items-center gap-2">
+-              <Chip icon="👤">Користувач: <b className="font-medium">{user}</b> ({role})</Chip>
+-              <Chip icon="🏷️">Версія: <b className="font-medium">{(version||"")}</b></Chip>
+-              <Chip icon="🧩" tone={espOnline ? "green" : "red"}>
+-                ESP: <b className="font-medium">{espIp}</b> • {espOnline ? "online" : "offline"}
+-              </Chip>
+-              <Chip icon="🔒" tone="gold">Ліцензія: {licenseInfo?.tier || "—"}</Chip>
+-              <Chip icon="💰" tone="blue">Тариф (база): <b className="font-medium">₴{Number(baseRate||0).toFixed(2)}/год</b></Chip>
++            {/* Назва/версія та чіпи: контейнер, що не переповнює */}
++            <div className="min-w-0 flex-1">
++              <div className="flex min-w-0 flex-wrap items-center gap-2">
++                <Chip tone="slate" title={`Користувач: ${user ?? ""}`}>
++                  👤 <span className="font-medium">{user || "—"}</span>
++                </Chip>
++                <Chip tone="blue" title={`Роль: ${role ?? ""}`}>
++                  🛡️ {role || "—"}
++                </Chip>
++                <Chip tone="gold" title={`Базовий тариф: ${baseRate ?? ""}`}>
++                  💸 {baseRate != null ? `${baseRate} грн/год` : "—"}
++                </Chip>
++                <Chip tone={espOnline ? "green" : "red"} title={`ESP: ${espIp || "—"}`}>
++                  ⚡ {espIp || "—"} {espOnline ? "онлайн" : "офлайн"}
++                </Chip>
++                {licenseInfo && (
++                  <Chip tone="slate" title={`Ліцензія: ${licenseInfo}`}>
++                    🔑 <span className="min-w-0 truncate">{licenseInfo}</span>
++                  </Chip>
++                )}
++                {version && (
++                  <Chip tone="slate" title={`Версія: ${version}`}>
++                    🧩 v{version}
++                  </Chip>
++                )}
++                {liveBadge && (
++                  <Chip tone="green" title={`${liveBadge}`}>
++                    <span className="inline-flex items-center gap-2">
++                      <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-600" />
++                      <span className="min-w-0 truncate">{liveBadge}</span>
++                    </span>
++                  </Chip>
++                )}
++              </div>
+             </div>
+           </div>
+ 
+-          {/* Праворуч — дії */}
+-          <div className="ml-auto flex items-center gap-2">
+-            <button className="h-9 px-3 rounded-lg bg-sky-600 text-white hover:brightness-110" onClick={onFeedback}>Відгук</button>
+-            <button className="h-9 px-3 rounded-lg bg-emerald-600 text-white hover:brightness-110" onClick={onAddTable}>+ Стіл</button>
+-            <button className="h-9 px-3 rounded-lg bg-rose-600 text-white hover:brightness-110" onClick={onRemoveTable}>− Стіл</button>
+-            <button
+-              className="h-9 px-3 rounded-lg bg-slate-900 text-white hover:brightness-110"
+-              onClick={(e)=> onOpenMenu?.(e.currentTarget.getBoundingClientRect())}
+-            >
+-              ☰ Меню
+-            </button>
++          {/* Кнопки дій — завжди в межах, можуть переноситись на новий рядок */}
++          <div className="flex w-full justify-start gap-2 sm:w-auto sm:justify-end">
++            <div className="flex flex-wrap items-center gap-2">
++              <button
++                className="h-9 shrink-0 rounded-lg bg-sky-600 px-3 text-white shadow-sm transition active:translate-y-px hover:brightness-110"
++                onClick={onFeedback}
++              >
++                Відгук
++              </button>
++              <button
++                className="h-9 shrink-0 rounded-lg bg-emerald-600 px-3 text-white shadow-sm transition active:translate-y-px hover:brightness-110"
++                onClick={onAddTable}
++              >
++                + Стіл
++              </button>
++              <button
++                className="h-9 shrink-0 rounded-lg bg-rose-600 px-3 text-white shadow-sm transition active:translate-y-px hover:brightness-110"
++                onClick={onRemoveTable}
++              >
++                − Стіл
++              </button>
++              <button
++                className="h-9 shrink-0 rounded-lg bg-slate-900 px-3 text-white shadow-sm transition active:translate-y-px hover:brightness-110"
++                onClick={(e) => onOpenMenu?.(e.currentTarget.getBoundingClientRect())}
++              >
++                ☰ Меню
++              </button>
++            </div>
+           </div>
+         </div>
+       </div>

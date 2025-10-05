@@ -88,3 +88,71 @@ html { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; 
 .zoom-in-95 { animation-name: zoom-in-95 }
 
 .bb-modal-overlay[data-modal-title="Налаштування"] .bb-modal-panel { width: min(96vw, 1200px) !important; }
+
+
+/* ====== TopBar animations & helpers ====== */
+@keyframes gradientSlide {
+  0% { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+@keyframes softPulse {
+  0% { transform: scale(1); opacity:.55;}
+  50% { transform: scale(1.06); opacity:.85;}
+  100% { transform: scale(1); opacity:.55;}
+}
+@keyframes fadeUp {
+  from { transform: translateY(6px); opacity: 0; }
+  to   { transform: translateY(0); opacity: 1; }
+}
+@keyframes wiggle {
+  0%,100% { transform: rotate(0deg); }
+  30% { transform: rotate(2deg); }
+  60% { transform: rotate(-2deg); }
+}
+.animate-gradientSlide {
+  background-size: 200% 100%;
+  animation: gradientSlide 6s linear infinite;
+}
+.animate-softPulse { animation: softPulse 2.2s ease-in-out infinite; }
+
+/* Сходинка-анімація для чіпів */
+.animate-staggerIn > * {
+  animation: fadeUp .45s ease both;
+}
+.animate-staggerIn > *:nth-child(1){ animation-delay: .02s }
+.animate-staggerIn > *:nth-child(2){ animation-delay: .06s }
+.animate-staggerIn > *:nth-child(3){ animation-delay: .10s }
+.animate-staggerIn > *:nth-child(4){ animation-delay: .14s }
+.animate-staggerIn > *:nth-child(5){ animation-delay: .18s }
+
+/* Пульс кола для активних статусів */
+.chip-pulse { position: relative; }
+.chip-pulse::after{
+  content:""; position:absolute; inset:-2px;
+  border-radius:9999px; box-shadow:0 0 0 0 rgba(16,185,129,.25);
+  animation: softPulse 2.4s ease-in-out infinite;
+}
+
+/* Кнопки TopBar */
+.tb-btn{
+  height: 36px; padding: 0 14px; border-radius: .6rem;
+  color: white; font-weight: 600;
+  display: inline-flex; align-items: center; gap: .4rem;
+  box-shadow: 0 6px 14px rgba(0,0,0,.12);
+  transition: transform .15s ease, box-shadow .2s ease, filter .15s ease;
+}
+.tb-btn:active{ transform: translateY(1px) scale(.995); box-shadow: 0 4px 10px rgba(0,0,0,.15); }
+
+/* Меню — легкий wiggle при наведенні */
+.menu-wiggle:hover{ animation: wiggle .6s ease both; }
+
+/* Live badge як «біжучий рядок» */
+.marquee{ position:relative; overflow:hidden; height: 14px; }
+.marquee__inner{
+  position:absolute; white-space:nowrap; will-change: transform;
+  animation: marqueeMove 8s linear infinite;
+}
+@keyframes marqueeMove {
+  from { transform: translateX(0%); }
+  to   { transform: translateX(-100%); }
+}
