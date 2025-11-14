@@ -1,0 +1,18 @@
+// Example how a table start/stop button should trigger relay via central store.
+import React from "react";
+import { rtStore } from "../state/rtStore";
+
+export default function TableCardExample({ table }) {
+  async function onStart() {
+    await rtStore.toggleForTable(table.id, "on");
+  }
+  async function onStop() {
+    await rtStore.toggleForTable(table.id, "off");
+  }
+  return (
+    <div>
+      <button onClick={onStart}>Старт</button>
+      <button onClick={onStop}>Стоп</button>
+    </div>
+  );
+}

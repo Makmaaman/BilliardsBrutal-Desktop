@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import ModalShell from "../components/ModalShell";
+import FacilityMapEditor from '../components/map/FacilityMapEditor';
 
+import ReceiptTab from "./Settings/ReceiptTab";
 const TabBtn = ({active, onClick, children}) => (
   <button
     onClick={onClick}
@@ -34,9 +36,11 @@ export default function SettingsModal(props) {
     // bonuses
     bonusEarnPct, setBonusEarnPct = () => {},
     bonusPerHour, setBonusPerHour = () => {},
+    // facility map
+    facilityMap, setFacilityMap = () => {},
   } = props || {};
 
-  const [tab, setTab] = useState("controllers");
+  const [tab, setTab] = useState("map");
 
   // ---- Connectivity check ----
   const [online, setOnline] = useState({});           // {ctrlId: boolean}
@@ -107,10 +111,10 @@ export default function SettingsModal(props) {
   // ---- CRUD for controllers ----
   function updateController(idx, patch){
     setControllers(arr => {
-      const next = [...(arr||[])];
+      const next = [].concat(arr || []);
       const curr = { ...(next[idx]||{}) };
       const merged = { ...curr, ...patch };
-      if (curr.isNew) delete merged.isNew; // зняти підсвітку при першій зміні
+      if (curr.isNew) delete merged.isNew;
       next[idx] = merged;
       return next;
     });
@@ -118,7 +122,7 @@ export default function SettingsModal(props) {
   function addController(){
     setControllers(arr => {
       const id = "ctrl-"+Math.random().toString(36).slice(2,8);
-      return [...(arr||[]), { id, name: "Контролер", ip: "", channels: 8, enabled: true, isNew: true }];
+      return [].concat(arr || [], [{ id, name: "Контролер", ip: "", channels: 8, enabled: true, isNew: true }]);
     });
     setTimeout(()=>{
       const el = document.querySelector("#controllers-list-end");
@@ -130,6 +134,48 @@ export default function SettingsModal(props) {
   }
 
   const anyOnline = Object.values(online||{}).some(Boolean) || !!fallbackOnline;
+
+  // ============== ПРИНТЕР: сканер/тест RAW ==============
+  const [finding, setFinding] = useState(false);
+  const [found, setFound] = useState([]); // [{ip, kind, ports:{raw9100, ipp, lpd}}]
+  const [scanMsg, setScanMsg] = useState("");
+  const [manualIP, setManualIP] = useState("");
+
+  async function scanPrinters(){
+    setFinding(true); setScanMsg("Сканую мережу…"); setFound([]);
+    try {
+      const list = await window.printers?.scan?.({}) || [];
+      setFound(Array.isArray(list) ? list : []);
+      setScanMsg(!list?.length ? "Нічого не знайдено" : "");
+    } catch(e){
+      setScanMsg("Помилка: " + (e?.message || String(e)));
+    } finally { setFinding(false); }
+  }
+  async function probeIP(){
+    const ip = (manualIP || "").trim();
+    if(!isValidIPv4(ip)) { setScanMsg("Вкажіть коректний IP (IPv4)."); return; }
+    setFinding(true); setScanMsg("Перевіряю IP…");
+    try {
+      const res = await window.printers?.probeIp?.(ip);
+      if (res?.ok && res?.probe) {
+        setFound([{ ip, kind: res.probe.kind || "unknown", ports: res.probe.ports || {} }]);
+        setScanMsg("");
+      } else {
+        setFound([]);
+        setScanMsg("Портів для друку не знайдено на цьому IP.");
+      }
+    } catch(e) {
+      setFound([]);
+      setScanMsg("Помилка перевірки: " + (e?.message || String(e)));
+    } finally { setFinding(false); }
+  }
+  async function testRaw(){
+    const ip = (printerIP || "").trim();
+    if(!isValidIPv4(ip)) { alert("Спочатку оберіть/введіть коректний IP принтера."); return; }
+    const r = await window.printers?.testRaw?.(ip);
+    if (r?.ok) alert("RAW:9100 тест → OK (принтер прийняв дані)");
+    else alert("RAW:9100 тест не вдався: " + (r?.error || "невідомо"));
+  }
 
   return (
     <ModalShell
@@ -154,14 +200,26 @@ export default function SettingsModal(props) {
     >
       {/* Tabs */}
       <div className="flex flex-wrap gap-2 mb-4">
-        <TabBtn active={tab==='general'} onClick={()=>setTab('general')}>Загальні</TabBtn>
-        <TabBtn active={tab==='printer'} onClick={()=>setTab('printer')}>Принтер</TabBtn>
+        <TabBtn active={tab==='map'} onClick={()=>setTab('map')}>Карта закладу</TabBtn>
+        <TabBtn active={tab==='receipt'} onClick={()=>setTab('receipt')}>Чек</TabBtn>
         <TabBtn active={tab==='controllers'} onClick={()=>setTab('controllers')}>Контролери</TabBtn>
         <TabBtn active={tab==='tables'} onClick={()=>setTab('tables')}>Столи</TabBtn>
+        <TabBtn active={tab==='general'}
+          
+ onClick={()=>setTab('general')}>Загальні</TabBtn>
+        <TabBtn active={tab==='printer'} onClick={()=>setTab('printer')}>Принтер</TabBtn>
       </div>
-
+        {tab === 'receipt' && (
+              <ReceiptTab />
+            )}
       {/* BODY */}
       <div className="max-h-[70vh] overflow-y-auto overflow-x-hidden pr-1 space-y-6">
+        {tab === 'map' && (
+          <section className="space-y-4">
+              <FacilityMapEditor value={facilityMap} onChange={setFacilityMap} tables={tables}/>
+          </section>
+        )}
+        
         {tab === 'controllers' && (
           <section className="space-y-4">
             {/* Overall status banner */}
@@ -342,24 +400,68 @@ export default function SettingsModal(props) {
         {tab === 'printer' && (
           <div className="grid md:grid-cols-2 gap-6">
             <section className="space-y-3 p-4 rounded-2xl ring-1 ring-slate-200 bg-white">
-              <div className="text-sm font-semibold">Принтер</div>
+              <div className="text-sm font-semibold">Принтер (RAW:9100)</div>
               <label className="block text-xs text-slate-500">IP принтера</label>
-              <input className="w-full h-10 px-3 rounded-xl border border-slate-300" value={printerIP || ""} onChange={e=>setPrinterIP(e.target.value)} />
+              <div className="flex gap-2">
+                <input className="w-full h-10 px-3 rounded-xl border border-slate-300 font-mono"
+                       placeholder="192.168.1.126"
+                       value={printerIP || ""}
+                       onChange={e=>setPrinterIP(e.target.value)} />
+                <button className="px-3 rounded-xl border" onClick={testRaw}>Тест RAW</button>
+              </div>
+
               <label className="flex items-center gap-2 text-sm">
                 <input type="checkbox" checked={!!printerMock} onChange={e=>setPrinterMock(e.target.checked)} />
                 Режим «mock» (без реального принтера)
               </label>
-              <div>
+
+              <div className="flex items-center gap-2">
                 <button className="px-4 py-2 rounded-xl border text-sm bg-white text-slate-800 border-slate-300"
-                        onClick={onTestPrint}>Тестовий чек</button>
+                        onClick={onTestPrint}>Тестовий чек (App)</button>
               </div>
             </section>
 
             <section className="space-y-3 p-4 rounded-2xl ring-1 ring-slate-200 bg-white">
-              <div className="text-sm font-semibold">Підказка</div>
+              <div className="text-sm font-semibold">Пошук принтерів у мережі</div>
+
+              <div className="flex gap-2">
+                <button className="h-10 px-3 rounded-xl border" onClick={scanPrinters} disabled={finding}>
+                  {finding ? "Сканую…" : "Сканувати мережу"}
+                </button>
+                <input className="h-10 px-3 rounded-xl border border-slate-300 font-mono w-[180px]"
+                       placeholder="Перевірити IP"
+                       value={manualIP}
+                       onChange={e=>setManualIP(e.target.value)} />
+                <button className="h-10 px-3 rounded-xl border" onClick={probeIP} disabled={finding}>Перевірити</button>
+              </div>
+
+              {scanMsg && <div className="text-xs text-slate-600">{scanMsg}</div>}
+
+              <div className="max-h-48 overflow-auto divide-y divide-slate-100 rounded-lg border">
+                {(found||[]).map((p)=>(
+                  <div key={p.ip} className="flex items-center justify-between px-3 py-2 bg-white">
+                    <div className="text-sm">
+                      <div className="font-mono">{p.ip}</div>
+                      <div className="text-xs text-slate-500">
+                        {p.kind?.toUpperCase() || "unknown"} • RAW:{String(p?.ports?.raw9100)} IPP:{String(p?.ports?.ipp)} LPD:{String(p?.ports?.lpd)}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button className="h-8 px-3 rounded-lg border" onClick={()=>setPrinterIP(p.ip)}>Вибрати</button>
+                      <button className="h-8 px-3 rounded-lg border" onClick={async()=>{
+                        const r = await window.printers?.testRaw?.(p.ip);
+                        alert(r?.ok ? "RAW:9100 тест → OK" : ("Помилка: " + (r?.error || "невідомо")));
+                      }}>Тест RAW</button>
+                    </div>
+                  </div>
+                ))}
+                {!found?.length && !scanMsg && (
+                  <div className="px-3 py-2 text-sm text-slate-500 bg-white">Натисніть «Сканувати мережу» або «Перевірити»</div>
+                )}
+              </div>
+
               <div className="text-xs text-slate-600">
-                Якщо принтер напряму по IP — вкажіть адресу й вимкніть mock.<br/>
-                Якщо принтер відсутній — залиште mock увімкненим.
+                Підказка: XPrinter по Wi-Fi зазвичай підтримує RAW:9100. Якщо RAW недоступний — перевірте, що ПК і принтер в одній підмережі та на принтері не вимкнений RAW-порт.
               </div>
             </section>
           </div>

@@ -1,0 +1,27 @@
+// Example controllers tab bound to rtStore. Keep your UI; only logic shown.
+import React from "react";
+import { useRtStore } from "../../../hooks/useRtStore";
+import { rtStore } from "../../../state/rtStore";
+
+export default function ControllersTabExample() {
+  const { controllers } = useRtStore();
+  function onChange(idx, field, value) {
+    const next = [...controllers];
+    next[idx] = { ...next[idx], [field]: value };
+    rtStore.setControllers(next);
+  }
+  return (
+    <div>
+      {(controllers||[]).map((c, idx) => (
+        <div key={c.id||idx}>
+          <input value={c.name||""} onChange={e => onChange(idx, "name", e.target.value)} />
+          <input value={c.espIP||c.ip||""} onChange={e => onChange(idx, "espIP", e.target.value)} />
+          <label>
+            <input type="checkbox" checked={!!c.enabled} onChange={e => onChange(idx, "enabled", e.target.checked)} />
+            Увімкнено
+          </label>
+        </div>
+      ))}
+    </div>
+  );
+}

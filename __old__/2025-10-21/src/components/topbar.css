@@ -1,0 +1,88 @@
+/* src/components/topbar.css — glass effect + micro animations */
+.tb-wrap{
+  position: sticky; top: 0; z-index: 40;
+  background: linear-gradient(180deg, rgba(241,245,249,.8), rgba(241,245,249,.45));
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(15,23,42,.06);
+}
+.tb-inner{
+  max-width: 1280px; margin: 0 auto;
+  display: grid; grid-template-columns: 1fr auto;
+  gap: 12px; padding: 10px 14px;
+}
+
+/* layout */
+.tb-left{ display:flex; gap:12px; align-items:flex-start; min-width:0; }
+.tb-right{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+
+/* Logo */
+.tb-logo{
+  width: 44px; height: 44px; border-radius: 999px;
+  position: relative; display:grid; place-items:center;
+  background: radial-gradient(80% 80% at 30% 20%, #fff, #e6f0ff);
+  box-shadow: 0 10px 18px rgba(2,8,23,.12), inset 0 0 0 1px rgba(2,8,23,.06);
+  overflow:hidden;
+}
+.tb-logo-ring{
+  position:absolute; inset:-1px;
+  border-radius:inherit;
+  background: conic-gradient(from 0deg, #22d3ee, #22c55e, #60a5fa, #22d3ee);
+  filter: blur(12px); opacity:.5; animation: tb-rot 6s linear infinite;
+}
+.tb-logo-text{ position:relative; font-weight:800; color:#0f172a; }
+@keyframes tb-rot{ to{ transform: rotate(360deg); } }
+
+/* rows */
+.tb-row{ display:flex; flex-wrap:wrap; gap:10px; min-width:0; }
+
+/* pill */
+.tb-pill{
+  display:inline-flex; align-items:center; gap:10px;
+  padding: 8px 12px; border-radius: 14px;
+  border: 1px solid rgba(2,8,23,.08);
+  background: linear-gradient(135deg, #ffffffcc, #f1f5f9bb);
+  box-shadow: 0 10px 18px rgba(2,8,23,.06);
+  min-height: 40px;
+}
+.tb-pill-slate{}
+.tb-pill-green{ background: linear-gradient(135deg,#ecfdf5cc,#d1fae5bb); border-color:#a7f3d0; }
+.tb-pill-blue { background: linear-gradient(135deg,#eff6ffcc,#e0f2feb b); border-color:#bae6fd; }
+.tb-pill-amber{ background: linear-gradient(135deg,#fffbebcc,#fef3c7bb); border-color:#fde68a; }
+.tb-pill-red  { background: linear-gradient(135deg,#fef2f2cc,#fee2e2bb); border-color:#fecaca; }
+.tb-pill-ico{ font-size: 16px; line-height: 1; }
+.tb-pill-lines{ display:flex; flex-direction:column; }
+.tb-pill-main{ font-weight: 700; color:#0f172a; display:flex; align-items:center; gap:8px; }
+.tb-pill-sub { font-size: 12px; color:#475569; margin-top:2px; }
+
+/* animated dot */
+.tb-dot{ width:8px; height:8px; border-radius:999px; display:inline-block; }
+.tb-dot-green{ background:#10b981; box-shadow:0 0 0 0 rgba(16,185,129,.6); animation: tb-pulse 2s infinite; }
+.tb-dot-red  { background:#f43f5e; box-shadow:0 0 0 0 rgba(244,63,94,.6);  animation: tb-pulse 2s infinite; }
+@keyframes tb-pulse{
+  0%{ box-shadow:0 0 0 0 rgba(16,185,129,.6); }
+  70%{ box-shadow:0 0 0 8px rgba(16,185,129,0); }
+  100%{ box-shadow:0 0 0 0 rgba(16,185,129,0); }
+}
+
+/* buttons */
+.tb-btn{
+  height: 36px; padding: 0 14px; border-radius: 12px;
+  display:inline-flex; align-items:center; justify-content:center;
+  transition: transform .15s ease, filter .15s ease;
+  box-shadow: 0 10px 18px rgba(2,8,23,.08);
+}
+.tb-btn:hover{ transform: translateY(-1px); filter: brightness(1.05); }
+.tb-btn:active{ transform: translateY(0); }
+@media (max-width: 900px){
+  .tb-inner{ grid-template-columns: 1fr; }
+  .tb-right{ justify-content:flex-end; }
+}
+/* simple icon placeholders (you can swap to real SVGs) */
+.i{ width:1em; display:inline-block; text-align:center; }
+.i-user::before{ content:"👤"; }
+.i-role::before{ content:"🛡️"; }
+.i-bolt::before{ content:"⚡"; }
+.i-snow::before{ content:"❄️"; }
+.i-tag::before{ content:"🔗"; }
+.i-key::before{ content:"🔑"; }
+.i-info::before{ content:"ℹ️"; }

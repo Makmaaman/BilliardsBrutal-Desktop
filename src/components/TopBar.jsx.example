@@ -1,0 +1,11 @@
+// Use store to get real-time relayStatus; keep your design unchanged.
+import React from "react";
+import { useRtStore } from "../hooks/useRtStore";
+
+export default function TopBarExample() {
+  const { relayStatus } = useRtStore();
+  const relayText = relayStatus?.anyOnline
+    ? `Онлайн ${relayStatus.online}/${relayStatus.total}`
+    : "Реле офлайн";
+  return <div className="chip chip-relay">{relayText}</div>;
+}

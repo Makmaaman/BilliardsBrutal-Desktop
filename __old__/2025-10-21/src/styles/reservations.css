@@ -1,0 +1,249 @@
+.rsv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+}
+.rsv-title {
+  font-size: 18px;
+  font-weight: 600;
+}
+.rsv-controls {
+  display: flex;
+  gap: 12px;
+}
+.rsv-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rsv-body {
+  display: grid;
+  grid-template-columns: 280px 1fr;
+  min-height: 720px;
+}
+.rsv-left {
+  border-right: 1px solid var(--border-color);
+  padding: 12px;
+}
+.rsv-main {
+  position: relative;
+}
+
+.rsv-now-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent);
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+.rsv-block {
+  position: absolute;
+  left: 80px;
+  right: 16px;
+  background: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  cursor: grab;
+}
+.rsv-block:active {
+  cursor: grabbing;
+}
+
+.rsv-edit-btn {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.rsv-resize-handle {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 8px;
+  bottom: -4px;
+  cursor: ns-resize;
+  background: transparent;
+  z-index: 2;
+}
+
+.leftcal-head {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.leftcal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.leftcal-dow {
+  font-size: 11px;
+  opacity: 0.6;
+  text-align: center;
+  padding: 4px 0;
+}
+.leftcal-cell {
+  aspect-ratio: 1/1;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+}
+.leftcal-cell.is-today {
+  border-color: var(--accent);
+}
+.leftcal-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+}
+.leftcal-cell.is-today .leftcal-num {
+  background: var(--accent);
+  color: white;
+  font-weight: 700;
+}
+
+
+/* ====== Reservations layout fixes ====== */
+.rsv-body{
+  display:grid;
+  grid-template-columns: 280px 1fr;
+  gap:16px;
+  padding: 12px 16px;
+}
+.rsv-left{
+  min-width: 240px;
+}
+.rsv-main{
+  position: relative;
+  border: 1px solid var(--border-color, #e5e7eb);
+  border-radius: 12px;
+  background: white;
+  overflow: auto;
+  min-height: 520px;
+  max-height: 64vh; /* вкладеться у модальне вікно */
+}
+
+/* Time grid: two columns: time labels + canvas */
+.rsv-grid{
+  position: relative;
+  display: grid;
+  grid-template-columns: 64px 1fr;
+}
+.rsv-hours{
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: linear-gradient(to right, white 60%, rgba(0,0,0,0));
+  border-right: 1px solid #eef2f7;
+}
+.rsv-hour{
+  font-size: 12px;
+  color: #475569;
+  padding-right: 8px;
+  text-align: right;
+  transform: translateY(-6px);
+}
+.rsv-canvas{
+  position: relative;
+}
+.rsv-hline{
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: #eef2f7;
+}
+.rsv-now{
+  position:absolute;
+  left:0;
+  right:0;
+  height:2px;
+  background:#f43f5e; /* rose-500 */
+}
+
+/* Left calendar basics */
+.leftcal{}
+.leftcal-head{
+  font-weight:600;
+  margin: 8px 0 12px 4px;
+  text-transform: lowercase;
+}
+.leftcal-grid{
+  display:grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap:8px 6px;
+}
+.leftcal-dow{
+  font-size:12px;
+  color:#64748b;
+}
+.leftcal-cell{
+  height:28px;
+}
+.leftcal-num{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:28px;height:28px;
+  border-radius:8px;
+  border:1px solid #e5e7eb;
+}
+.leftcal-cell.is-today .leftcal-num{
+  background:#10b981;
+  color:#fff;
+  border-color:#10b981;
+  font-weight:700;
+}
+
+/* Bottom padding so late reservations are visible */
+.rsv-main{ padding-bottom: 32px; }
+.rsv-hline.opacity-40{ opacity: .3; }
+
+/* --- Time column polish --- */
+.rsv-grid{ grid-template-columns: 80px 1fr; }
+
+.rsv-hours{
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: linear-gradient(to right, #fff 70%, rgba(255,255,255,0));
+  border-right: 1px solid #eef2f7;
+  width: 80px;
+}
+
+.rsv-hourchip{
+  position: absolute;
+  left: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: #334155;
+  background: #f8fafc;
+  border-radius: 9999px;
+  box-shadow: inset 0 0 0 1px #e5e7eb;
+  transform: translateY(-7px);
+}
+
+.rsv-minlabel{
+  position: absolute;
+  left: 40px;
+  transform: translate(-50%, -7px);
+  font-size: 10px;
+  color: #94a3b8;
+}
+
+.rsv-canvas{ background-image: linear-gradient(#f5f7fb 1px, transparent 1px); background-size: 100% 80px; } /* soft backdrop every ~hour */

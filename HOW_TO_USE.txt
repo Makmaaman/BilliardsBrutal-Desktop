@@ -1,0 +1,20 @@
+
+HOW TO USE (без ручних правок)
+==============================
+1) Скопіюй цю папку у свій проєкт.
+2) ВИБЕРИ, який main ти використовуєш:
+   - Якщо твій main у КОРЕНІ, заміни свій `main.js` на наданий `/main.js`.
+   - Якщо твій main у папці `electron`, заміни `electron/main.js` на наданий `electron/main.js`.
+3) Обов'язково скопіюй:
+   - `electron/receiptPrinter.js`
+   - `electron/preload.js`
+   - `src/services/receiptPrint.js`
+4) Запусти проєкт:
+   - Dev:   `npm run dev` (або твоя команда)
+   - Prod:  зібрати і запустити як зазвичай
+5) Виклик у React:
+   ```js
+   import { listPrinters, printReceipt } from '@/services/receiptPrint';
+   const p = await listPrinters(); console.log(p);
+   await printReceipt({ title:'Billiard Club', items:[{name:'Стіл #1', qty:1, price:120}], total:120 });
+   ```

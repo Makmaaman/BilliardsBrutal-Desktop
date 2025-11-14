@@ -1,37 +1,77 @@
-// src/lib/espClient.js
+// src/lib/espClient.js — deterministic 0-based mapping for 4 relays (0,1,2,3)
+function hasBridge() {
+  try { return typeof window !== "undefined" && window.esp && typeof window.esp.get === "function"; }
+  catch { return false; }
+}
 
-// Базовий GET через IPC (або тихий фолбек, якщо IPC недоступний)
-export async function espGET(url, { timeout = 5000, silent = true } = {}) {
+export function normalizeBase(base) {
+  if (!base) return null;
+  let b = String(base).trim();
+  if (!/^https?:\/\//i.test(b)) b = "http://" + b;
+  return b.replace(/\/+$/,"");
+}
+
+async function bridgeGET(url) {
+  if (!hasBridge()) return null;
   try {
-    if (window.esp?.get) {
-      const r = await window.esp.get(url, { timeout });
-      if (!r.ok) throw new Error(r.error || ('HTTP ' + r.status));
-      return r; // { ok:true, status, text }
-    }
-    // Фолбек: "тихий" no-cors (відповідь не прочитаємо, але команда піде)
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeout);
-    await fetch(url, { mode: 'no-cors', cache: 'no-store', signal: controller.signal });
-    clearTimeout(timer);
-    return { ok: true, status: 200, text: '' };
+    const res = await window.esp.get(url);
+    if (res && typeof res.ok === "boolean") return res;
+  } catch {}
+  return null;
+}
+
+async function fetchGET(url, timeout = 1500) {
+  try {
+    const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    const id = ctrl ? setTimeout(() => ctrl.abort(), timeout) : null;
+    const res = await fetch(url, { method: "GET", mode: "no-cors", cache: "no-cache", signal: ctrl ? ctrl.signal : undefined });
+    if (id) clearTimeout(id);
+    // On LAN many firmwares return opaque; treat as success for relay toggle
+    if (res && res.type === "opaque") return { ok: true, opaque: true, status: 0 };
+    return { ok: !!res?.ok, status: res?.status ?? 0 };
   } catch (e) {
-    if (!silent) throw e;
-    console.warn('[ESP]', e.message || e);
-    return { ok: false, error: e.message || String(e) };
+    return { ok: false, error: String((e && e.message) || e) };
   }
 }
 
-// Зручні хелпери під типові маршрути вашого ESP
-export async function relay(espBaseUrl, num, state, opts = {}) {
-  const base = String(espBaseUrl || '').replace(/\/+$/, '');
-  const url = `${base}/relay?num=${encodeURIComponent(num)}&state=${state ? 'on' : 'off'}`;
-  return espGET(url, opts);
+async function httpGET(url, timeout = 1500) {
+  const viaBridge = await bridgeGET(url);
+  if (viaBridge) return viaBridge;
+  return fetchGET(url, timeout);
 }
 
-export async function ping(espBaseUrl, opts = {}) {
-  const base = String(espBaseUrl || '').replace(/\/+$/, '');
-  return espGET(`${base}/ping`, opts);
+export async function ping(base, timeout = 1200) {
+  const b = normalizeBase(base);
+  if (!b) return { ok: false };
+  const start = Date.now();
+  for (const p of ["/ping", "/status", "/"]) {
+    const res = await httpGET(b + p, timeout);
+    if (res.ok) return { ok: true, ms: Date.now() - start };
+  }
+  return { ok: false };
 }
 
-// Додайте свої, якщо потрібно:
-// export async function pwm(espBaseUrl, ch, value, opts = {}) { ... }
+export async function relay(base, channel, state, timeout = 1500) {
+  const b = normalizeBase(base);
+  if (!b) return { ok: false, error: "invalid base" };
+
+  // Expecting 0-based channels: 0,1,2,3  => tables 1,2,3,4
+  const ch0 = Number(channel) || 0;
+
+  const v = String(state ?? "").toLowerCase();
+  const on  = v === "on" || v === "1" || v === "true";
+  const off = v === "off" || v === "0" || v === "false";
+  const stateParam = on ? "on" : off ? "off" : (v || "on");
+
+  // Primary (what you confirmed works): /relay?num=<ch0>&state=<...>
+  let url = `${b}/relay?num=${ch0}&state=${stateParam}`;
+  let res = await httpGET(url, timeout);
+  if (res.ok || res.opaque) return { ok: true };
+
+  // Fallback with trailing slash (some firmwares require it)
+  url = `${b}/relay?num=${ch0}&state=${stateParam}/`;
+  res = await httpGET(url, timeout);
+  if (res.ok || res.opaque) return { ok: true };
+
+  return { ok: false, error: "relay endpoint failed" };
+}

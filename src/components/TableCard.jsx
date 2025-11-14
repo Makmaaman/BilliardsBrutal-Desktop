@@ -1,4 +1,3 @@
-// src/components/TableCard.jsx
 import React from "react";
 
 /* ===== helpers ===== */
@@ -21,6 +20,34 @@ const fmtMs = (ms) => {
   const s = Math.floor((t % 60000) / 1000);
   return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 };
+
+// === локальний запис чека після друку (як раніше) ===
+function ymd(ts){ return new Date(ts).toISOString().slice(0,10); }
+function saveReceiptToLocalStorage(entry){
+  const day = ymd(entry.finishedAt || Date.now());
+  const key = `stats:day:${day}`;
+  let bucket = {};
+  try { bucket = JSON.parse(localStorage.getItem(key) || "{}"); } catch {}
+  bucket[entry.id] = entry;
+  localStorage.setItem(key, JSON.stringify(bucket));
+}
+async function logReceiptAfterPrint({ tableId, amount, liveMs, players, bonusUsed }){
+  const finishedAt = Date.now();
+  const startedAt  = Math.max(0, finishedAt - (Number(liveMs) || 0));
+  const entry = {
+    id: `r_${finishedAt}_${Math.random().toString(36).slice(2,8)}`,
+    tableId,
+    tableName: `Стіл ${tableId}`,
+    amount: Number(amount || 0),
+    startedAt,
+    finishedAt,
+    intervals: [{ start: startedAt, end: finishedAt }],
+    players: Array.isArray(players) ? players.slice(0,4).map(p => ({ id: p.id, name: p.name })) : [],
+    shiftId: localStorage.getItem("stats:shiftId") || null,
+    bonusUsed: !!bonusUsed,
+  };
+  saveReceiptToLocalStorage(entry);
+}
 
 export default function TableCard({
   table,
@@ -45,9 +72,11 @@ export default function TableCard({
   onToggleBonus,
 }) {
   const isOn = !!table?.isOn;
-  const canStart =
-  canOperate && !busy && !isOn &&
-  (!bonusActive || (Array.isArray(playerInfo) && playerInfo.length > 0));
+
+  // --- тепер опціонально: дозволено 0..4 гравців ---
+  const playersCount = Array.isArray(playerInfo) ? playerInfo.length : 0;
+  const tooManyPlayers = playersCount > 4; // тільки це блокує
+  const canStart = canOperate && !busy && !isOn && !tooManyPlayers;
   const canPause = canOperate && !busy && isOn;
 
   const transferTargets = (tables || []).filter((t) => t.id !== table.id);
@@ -83,38 +112,49 @@ export default function TableCard({
                   ? "bg-emerald-600 hover:bg-emerald-500 text-white ring-emerald-500/30"
                   : "bg-white/15 hover:bg-white/20 text-white ring-white/15"
               }`}
-            
             title="Грати за бонуси"
           >
             <span className="mr-1.5">🎁</span> За бонуси
           </button>
 
-          <button
-            onClick={() => onSetPlayers?.(table.id)}
-            className="h-10 px-4 rounded-xl text-[14px] bg-white/15 hover:bg-white/20 text-white ring-1 ring-white/15 shadow-md inline-flex items-center justify-center gap-2 transition"
-          >
-            <span className="mr-1.5">👥</span> Гравці
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onSetPlayers?.(table.id)}
+              className={[
+                "h-10 px-4 rounded-xl text-[14px] ring-1 shadow-md inline-flex items-center justify-center gap-2 transition",
+                "bg-white/15 hover:bg-white/20 text-white ring-white/15",
+                tooManyPlayers ? "outline outline-2 outline-rose-500/70" : ""
+              ].join(" ")}
+              title="Оберіть до 4 гравців (необовʼязково)"
+            >
+              <span className="mr-1.5">👥</span> Гравці
+            </button>
+            {tooManyPlayers && (
+              <span className="text-[12px] text-rose-200">Макс. 4 гравців</span>
+            )}
+          </div>
         </div>
 
-        {/* Players */}
+        {/* Players (показуємо до 4 бейджів) */}
         <div className="mt-3 flex flex-wrap items-center gap-2 min-h-[28px]">
-          {Array.isArray(playerInfo) && playerInfo.length ? (
-            playerInfo.slice(0, 2).map((p) => (
-              <span
-                key={p.id}
-                className="inline-flex items-center gap-2 max-w-[220px] truncate px-3 h-7 rounded-full text-[12px] bg-white/10 ring-1 ring-white/15 shadow-sm"
-                title={`${p.name} — баланс ${p.balance || 0}`}
-              >
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                <span className="truncate">{p.name}</span>
-                <span className="text-[11px] opacity-75">{(p.balance || 0).toFixed(2)}</span>
-              </span>
-            ))
-          ) : (
-            <span className="text-[12px] opacity-70">Гравці не вибрані</span>
-          )}
-        </div>
+  {Array.isArray(playerInfo) && playerInfo.length ? (
+    playerInfo.slice(0, 4).map((p) => (
+      <span
+        key={p.id}
+        className="inline-flex items-center gap-2 max-w-[220px] truncate px-3 h-7 rounded-full text-[12px] bg-white/10 ring-1 ring-white/15 shadow-sm"
+        title={`${p.name}${p.balance!=null ? ` — бонус ${p.balance}` : ""}`}
+      >
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
+        <span className="truncate">{p.name}</span>
+        {p.balance!=null && (
+          <span className="text-[11px] opacity-85">🎁 {(Number(p.balance)||0).toFixed(2)}</span>
+        )}
+      </span>
+    ))
+  ) : (
+    <span className="text-[12px] opacity-70">Гравці не вибрані</span>
+  )}
+</div>
 
         {/* Metrics */}
         <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -155,25 +195,36 @@ export default function TableCard({
         </div>
 
         {/* Extra actions */}
+        
         <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
           <button
             className="h-10 rounded-xl text-[14px] bg-white/12 hover:bg-white/16 text-white ring-1 ring-white/15 shadow-md transition inline-flex items-center justify-center gap-2"
-            onClick={() => onPrintReset?.(table.id)}
+            onClick={async () => {
+              await onPrintReset?.(table.id);
+              try {
+                await logReceiptAfterPrint({
+                  tableId: table.id,
+                  amount: cost,
+                  liveMs,
+                  players: playerInfo,
+                  bonusUsed: bonusActive,
+                });
+              } catch (e) {
+                console.warn("Не вдалось записати чек у статистику:", e);
+              }
+            }}
           >
             🧾 Чек + Скинути
           </button>
 
-          {/* КАСТОМНИЙ ДРОПДАУН ЗАМІСТЬ SELECT */}
           <TransferMenu
             targets={transferTargets}
             onChoose={(toId) => onTransfer?.(table.id, toId)}
           />
         </div>
 
-        {/* Spacer to push footer down */}
         <div className="flex-1" />
 
-        {/* Footer */}
         <div className="pt-2 text-[12px] opacity-70">Канал реле: {relayChannel ?? "—"}</div>
       </div>
     </div>

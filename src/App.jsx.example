@@ -1,0 +1,19 @@
+// Wire the central store once; keep your design intact.
+import React, { useEffect } from "react";
+import { rtStore } from "./state/rtStore";
+import { useRtStore } from "./hooks/useRtStore";
+
+export default function AppExample() {
+  const { controllers } = useRtStore();
+
+  useEffect(() => { rtStore.start(7000); return () => rtStore.stop(); }, []);
+
+  return (
+    <>
+      {/* Your real TopBar should read useRtStore() and show relayStatus */}
+      {/* Your Settings modal tabs should use useRtStore() and rtStore setters */}
+      {/* Your Table cards should call rtStore.toggleForTable(tableId, "on"/"off") */}
+      <pre>{JSON.stringify(controllers, null, 2)}</pre>
+    </>
+  );
+}

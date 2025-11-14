@@ -1,35 +1,31 @@
-import './services/license.js'
 
+// electron/main.js — ready-to-use (electron folder) wired for printing + Vite dev
 const { app, BrowserWindow } = require('electron');
 const path = require('path');
+const { registerReceiptPrinting } = require('./receiptPrinter');
 
-let win;
+let mainWindow;
 
-function createWindow() {
-  win = new BrowserWindow({
-    width: 1280,
+function createWindow(){
+  mainWindow = new BrowserWindow({
+    width: 1200,
     height: 800,
-    show: false,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      nodeIntegration: false,
+      preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
+      nodeIntegration: false,
     },
   });
 
-  const isDev = !app.isPackaged;
-  if (isDev) {
-    // DEV: Vite dev-server
-    win.loadURL('http://localhost:5173/');
+  const devURL = process.env.VITE_DEV_SERVER_URL;
+  if (devURL) {
+    mainWindow.loadURL(devURL);
   } else {
-    // PROD: грузимо index.html із dist поруч з app
-    const appRoot = path.join(process.resourcesPath, 'app'); // де лежить app.asar content
-    const distDir = path.join(appRoot, 'dist');
-    const indexFile = path.join(distDir, 'index.html');
-    win.loadFile(indexFile);
+    const indexPath = path.join(__dirname, '..', 'dist', 'index.html');
+    mainWindow.loadFile(indexPath);
   }
 
-  win.once('ready-to-show', () => win.show());
+  registerReceiptPrinting(mainWindow);
 }
 
 app.whenReady().then(() => {
