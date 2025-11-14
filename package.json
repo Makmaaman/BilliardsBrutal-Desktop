@@ -1,7 +1,7 @@
 {
   "name": "billiards-brutal-desktop",
   "productName": "Duna Billiard Club",
-  "version": "3.6.6",
+  "version": "3.7.0",
   "description": "Billiards Brutal — desktop (Electron + Vite + React)",
   "author": "Makma",
   "private": true,
