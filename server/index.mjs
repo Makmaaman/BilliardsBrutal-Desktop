@@ -26,34 +26,6 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 300, standardHeaders: true, l
 
 const orders = new Map(); // in-memory
 
-// ---------- Tariffs / plans ----------
-const PLAN_PRICING = {
-  // Повні тарифи (разовий платіж 20000/30000 ти робиш окремо, тут — тільки місячна підтримка)
-  "full-5":  { amountUAH: 250, periodDays: 31 },
-  "full-10": { amountUAH: 250, periodDays: 31 },
-
-  // Помісячні тарифи
-  "lite-m":  { amountUAH: 600, periodDays: 31 },
-  "pro-m":   { amountUAH: 900, periodDays: 31 },
-
-  // legacy / fallback ids (на випадок старих клієнтів)
-  "pro":     { amountUAH: 250, periodDays: 31 },
-  "lite":    { amountUAH: 150, periodDays: 31 },
-};
-
-function resolvePlan(inputPlan, inputTier) {
-  const raw = String(inputPlan || inputTier || "").trim();
-  const id = raw || "lite-m";
-
-  if (PLAN_PRICING[id]) return { id, ...PLAN_PRICING[id] };
-
-  // fallback: все, що закінчується на "-m", вважаємо помісячним (600/міс)
-  if (id.endsWith("-m")) return { id, amountUAH: 600, periodDays: 31 };
-
-  // інакше тримаємось моделі «повної»/річної за замовчуванням (250)
-  return { id, amountUAH: 250, periodDays: 31 };
-}
-
 // ---------- Helpers ----------
 async function getPrivateKey() {
   if (!PRIVATE_KEY_PEM) throw new Error("PRIVATE_KEY_PEM missing");
@@ -126,3 +98,116 @@ app.get("/api/license/public-key", (_req, res) => {
 });
 
 app.get("/api/license/status", (req, res) => {
+  const mid = String(req.query.mid || "");
+  if (!mid) return res.status(400).json({ ok: false, error: "MISSING_MACHINE_ID" });
+  res.json({ ok: true, mid });
+});
+
+app.post("/api/orders", async (req, res) => {
+  try {
+    const { machineId, tier = "pro" } = req.body || {};
+    if (!machineId) return res.status(400).json({ ok: false, error: "MISSING_MACHINE_ID" });
+
+    // ---- Ціни під твої тарифи ----
+    let amountUAH;
+    switch (tier) {
+      case "lite-m":   // помісячний 600 грн
+        amountUAH = 600;
+        break;
+      case "pro-m":    // помісячний 900 грн
+        amountUAH = 900;
+        break;
+      case "lite":     // старий/простий lite
+        amountUAH = 150;
+        break;
+      case "pro":
+      default:
+        amountUAH = 250;
+        break;
+    }
+
+    const id = makeId();
+    const { invoiceId, pageUrl } = await monoCreateInvoice({ amountUAH, orderId: id });
+
+    const record = { id, machineId, tier, amount: amountUAH, invoiceId, pageUrl, status: "CREATED" };
+    orders.set(id, record);
+
+    console.log(`[ORDER_CREATE OK]`, { id, invoiceId, pageUrl, tier, amountUAH });
+    res.json({ ok: true, id, invoiceId, pageUrl, tier, amountUAH });
+  } catch (e) {
+    if (e?.code === "MONO_TOKEN_MISSING")
+      return res.status(503).json({ ok: false, error: "PAYMENTS_DISABLED" });
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message || "CREATE_ORDER_FAILED" });
+  }
+});
+
+app.post("/api/orders/:id/refresh", async (req, res) => {
+  try {
+    const id = req.params.id;
+    const rec = orders.get(id);
+    if (!rec) return res.status(404).json({ ok: false, error: "ORDER_NOT_FOUND" });
+
+    const st = await monoCheckInvoice(rec.invoiceId);
+    const status = (st.status || "").toLowerCase();
+    const paidAmount = Number(st.paidAmount || 0);
+    const expectedKop = uahToKop(rec.amount);
+
+    console.log("[ORDER_STATUS]", { id, status, paidAmount, expectedKop });
+
+    if (paidAmount < expectedKop) {
+      rec.status = status || "WAITING";
+      orders.set(id, rec);
+      return res.json({ ok: false, status: rec.status, paidAmount, expectedKop });
+    }
+
+    const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000;
+    const license = await signLicense({ machineId: rec.machineId, tier: rec.tier, expiresAt });
+    rec.status = "PAID";
+    rec.license = license;
+    orders.set(id, rec);
+
+    res.json({ ok: true, status: rec.status, license });
+  } catch (e) {
+    if (e?.code === "MONO_TOKEN_MISSING")
+      return res.status(503).json({ ok: false, error: "PAYMENTS_DISABLED" });
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message || "REFRESH_FAILED" });
+  }
+});
+
+app.post("/api/license/activate", async (req, res) => {
+  try {
+    const { machineId, tier = "pro", days = 365 } = req.body || {};
+    if (!machineId) return res.status(400).json({ ok: false, error: "MISSING_MACHINE_ID" });
+    const expiresAt = Date.now() + Number(days) * 24 * 60 * 60 * 1000;
+    const license = await signLicense({ machineId, tier, expiresAt });
+    res.json({ ok: true, license });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ ok: false, error: e.message || "ACTIVATE_FAILED" });
+  }
+});
+
+/* =========================
+ *  КЛІЄНТИ / БОНУСИ / АКЦІЇ
+ * ========================= */
+
+// ---- Customers ----
+app.get("/api/customers", async (req, res) => {
+  try {
+    const q = String(req.query.q || "").trim();
+    let rows;
+    if (q) {
+      rows = (await query(
+        `SELECT * FROM customers
+         WHERE phone ILIKE $1 OR name ILIKE $1 OR email ILIKE $1
+         ORDER BY created_at DESC LIMIT 200`,
+        [`%${q}%`]
+      )).rows;
+    } else {
+      rows = (await query(`SELECT * FROM customers ORDER BY created_at DESC LIMIT 200`)).rows;
+    }
+    res.json({ ok: true, items: rows });
+  } catch (e) {
+    console.error(e); res.statu
