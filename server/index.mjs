@@ -13,6 +13,8 @@ const PRIVATE_KEY_PEM = (process.env.PRIVATE_KEY_PEM || "").replace(/\\n/g, "\n"
 const PUBLIC_KEY_PEM  = (process.env.PUBLIC_KEY_PEM  || "").replace(/\\n/g, "\n");
 const MONO_TOKEN = process.env.MONO_TOKEN || "";
 const BASE_URL   = (process.env.BASE_URL || "").replace(/\/+$/,"");
+// Необов'язковий токен для ручної видачі ліцензії (X-Admin-Token)
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "";
 
 // ---------- APP ----------
 const app = express();
@@ -30,7 +32,88 @@ app.use(
   })
 );
 
-const orders = new Map(); // in-memory
+const orders = new Map(); // кеш у пам'яті (БД — джерело правди)
+
+/* ---------- Замовлення в БД ----------
+   Render на безкоштовному плані присипляє інстанс, і Map зникає разом із
+   замовленням: клієнт оплатив, повернувся — ORDER_NOT_FOUND і ліцензія не
+   видається. Тому кожне замовлення дублюємо в Postgres. */
+async function initOrdersTable() {
+  await query(`
+    CREATE TABLE IF NOT EXISTS orders (
+      id UUID PRIMARY KEY,
+      machine_id TEXT NOT NULL,
+      tier TEXT NOT NULL,
+      amount NUMERIC NOT NULL,
+      invoice_id TEXT,
+      page_url TEXT,
+      status TEXT NOT NULL DEFAULT 'CREATED',
+      license TEXT,
+      created_at TIMESTAMPTZ DEFAULT now(),
+      updated_at TIMESTAMPTZ DEFAULT now()
+    );
+  `);
+  await query(`CREATE INDEX IF NOT EXISTS orders_machine_id_idx ON orders (machine_id);`);
+}
+
+function rowToOrder(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    machineId: row.machine_id,
+    tier: row.tier,
+    amount: Number(row.amount),
+    invoiceId: row.invoice_id,
+    pageUrl: row.page_url,
+    status: row.status,
+    license: row.license || null,
+  };
+}
+
+async function saveOrder(rec) {
+  orders.set(rec.id, rec);
+  try {
+    await query(
+      `INSERT INTO orders (id, machine_id, tier, amount, invoice_id, page_url, status, license)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (id) DO UPDATE SET
+         status = EXCLUDED.status,
+         license = COALESCE(EXCLUDED.license, orders.license),
+         updated_at = now()`,
+      [rec.id, rec.machineId, rec.tier, rec.amount, rec.invoiceId, rec.pageUrl, rec.status, rec.license || null]
+    );
+  } catch (e) {
+    console.error("[ORDER_SAVE_FAILED]", rec.id, e.message);
+  }
+}
+
+async function getOrder(id) {
+  const cached = orders.get(id);
+  if (cached) return cached;
+  try {
+    const { rows } = await query(`SELECT * FROM orders WHERE id = $1`, [id]);
+    const rec = rowToOrder(rows[0]);
+    if (rec) orders.set(rec.id, rec);
+    return rec;
+  } catch (e) {
+    console.error("[ORDER_LOAD_FAILED]", id, e.message);
+    return null;
+  }
+}
+
+/** Останнє оплачене замовлення для машини (для відновлення ліцензії). */
+async function getPaidOrderForMachine(machineId) {
+  try {
+    const { rows } = await query(
+      `SELECT * FROM orders WHERE machine_id = $1 AND status = 'PAID' ORDER BY updated_at DESC LIMIT 1`,
+      [machineId]
+    );
+    return rowToOrder(rows[0]);
+  } catch (e) {
+    console.error("[ORDER_LOOKUP_FAILED]", machineId, e.message);
+    return null;
+  }
+}
 
 // ---------- Helpers ----------
 async function getPrivateKey() {
@@ -106,6 +189,7 @@ async function monoCheckInvoice(invoiceId) {
 app.get("/", (_req, res) =>
   res.json({ ok: true, service: "billiards-license-mono" })
 );
+app.get("/api/ping", (_req, res) => res.json({ ok: true, ts: Date.now() }));
 app.get("/api/health", (_req, res) =>
   res.json({ ok: true, ts: Date.now() })
 );
@@ -125,7 +209,11 @@ app.get("/api/license/status", (req, res) => {
 
 app.post("/api/orders", async (req, res) => {
   try {
-    const { machineId, tier = "pro" } = req.body || {};
+    // Клієнт (екран активації) надсилає поле plan, центр ліцензій — tier.
+    // Раніше читали лише tier, тому будь-який план оплачувався як "pro" (250 ₴).
+    const body = req.body || {};
+    const machineId = body.machineId;
+    const tier = body.tier || body.plan || "pro";
     if (!machineId)
       return res
         .status(400)
@@ -139,6 +227,14 @@ app.post("/api/orders", async (req, res) => {
     //   "pro"    → 250 грн (як було)
     let amountUAH;
     switch (tier) {
+      case "full-5":
+      case "full5":
+        amountUAH = 20000;   // «Повна • 5 столів» — разово
+        break;
+      case "full-10":
+      case "full10":
+        amountUAH = 30000;   // «Повна • 10 столів» — разово
+        break;
       case "lite-m":
         amountUAH = 600;
         break;
@@ -169,7 +265,7 @@ app.post("/api/orders", async (req, res) => {
       pageUrl,
       status: "CREATED",
     };
-    orders.set(id, record);
+    await saveOrder(record);
 
     console.log(`[ORDER_CREATE OK]`, {
       id,
@@ -191,10 +287,10 @@ app.post("/api/orders", async (req, res) => {
   }
 });
 
-app.post("/api/orders/:id/refresh", async (req, res) => {
+async function handleOrderRefresh(req, res) {
   try {
     const id = req.params.id;
-    const rec = orders.get(id);
+    const rec = await getOrder(id);
     if (!rec)
       return res
         .status(404)
@@ -214,7 +310,7 @@ app.post("/api/orders/:id/refresh", async (req, res) => {
 
     if (paidAmount < expectedKop) {
       rec.status = status || "WAITING";
-      orders.set(id, rec);
+      await saveOrder(rec);
       return res.json({
         ok: false,
         status: rec.status,
@@ -231,7 +327,7 @@ app.post("/api/orders/:id/refresh", async (req, res) => {
     });
     rec.status = "PAID";
     rec.license = license;
-    orders.set(id, rec);
+    await saveOrder(rec);
 
     res.json({ ok: true, status: rec.status, license });
   } catch (e) {
@@ -244,20 +340,72 @@ app.post("/api/orders/:id/refresh", async (req, res) => {
       .status(500)
       .json({ ok: false, error: e.message || "REFRESH_FAILED" });
   }
-});
+}
 
+app.post("/api/orders/:id/refresh", handleOrderRefresh);
+// аліас: встановлені клієнти (<= 3.9.2) звертаються саме до /check
+app.post("/api/orders/:id/check", handleOrderRefresh);
+
+/**
+ * Видача ліцензії. Раніше цей маршрут підписував ліцензію будь-кому, хто знав
+ * адресу сервера, без перевірки оплати. Тепер потрібне оплачене замовлення
+ * (orderId) або ADMIN_TOKEN для ручної видачі.
+ */
 app.post("/api/license/activate", async (req, res) => {
   try {
-    const { machineId, tier = "pro", days = 365 } = req.body || {};
+    const { machineId, orderId, tier, days = 365 } = req.body || {};
     if (!machineId)
       return res
         .status(400)
         .json({ ok: false, error: "MISSING_MACHINE_ID" });
-    const expiresAt =
-      Date.now() + Number(days) * 24 * 60 * 60 * 1000;
+
+    const adminToken = String(req.get("X-Admin-Token") || "");
+    const isAdmin = !!ADMIN_TOKEN && adminToken === ADMIN_TOKEN;
+
+    if (!isAdmin) {
+      // шукаємо оплачене замовлення: або конкретне, або останнє для цієї машини
+      let rec = orderId ? await getOrder(orderId) : null;
+      if (rec && String(rec.machineId) !== String(machineId)) rec = null;
+      if (!rec) rec = await getPaidOrderForMachine(machineId);
+
+      if (!rec)
+        return res
+          .status(404)
+          .json({ ok: false, error: "ORDER_NOT_FOUND" });
+
+      // якщо ще не позначене оплаченим — перепитуємо монобанк
+      if (rec.status !== "PAID") {
+        try {
+          const st = await monoCheckInvoice(rec.invoiceId);
+          const paidAmount = Number(st.paidAmount || 0);
+          if (paidAmount < uahToKop(rec.amount)) {
+            return res
+              .status(402)
+              .json({ ok: false, error: "ORDER_NOT_PAID", status: st.status || rec.status });
+          }
+          rec.status = "PAID";
+        } catch (e) {
+          return res
+            .status(402)
+            .json({ ok: false, error: "ORDER_NOT_PAID" });
+        }
+      }
+
+      const expiresAt = Date.now() + 365 * 24 * 60 * 60 * 1000;
+      const license = await signLicense({
+        machineId,
+        tier: rec.tier,
+        expiresAt,
+      });
+      rec.license = license;
+      await saveOrder(rec);
+      return res.json({ ok: true, license, tier: rec.tier });
+    }
+
+    const expiresAt = Date.now() + Number(days) * 24 * 60 * 60 * 1000;
     const license = await signLicense({
       machineId,
-      tier,
+      tier: tier || "pro",
       expiresAt,
     });
     res.json({ ok: true, license });
@@ -266,6 +414,44 @@ app.post("/api/license/activate", async (req, res) => {
     res
       .status(500)
       .json({ ok: false, error: e.message || "ACTIVATE_FAILED" });
+  }
+});
+
+/**
+ * Відновлення ліцензії за Machine ID — для тих, хто вже оплатив, але втратив
+ * номер замовлення (перевстановлення, втрачений localStorage).
+ */
+app.post("/api/license/restore", async (req, res) => {
+  try {
+    const { machineId } = req.body || {};
+    if (!machineId)
+      return res
+        .status(400)
+        .json({ ok: false, error: "MISSING_MACHINE_ID" });
+
+    const rec = await getPaidOrderForMachine(machineId);
+    if (!rec)
+      return res
+        .status(404)
+        .json({ ok: false, error: "NO_PAID_ORDER" });
+
+    const license =
+      rec.license ||
+      (await signLicense({
+        machineId,
+        tier: rec.tier,
+        expiresAt: Date.now() + 365 * 24 * 60 * 60 * 1000,
+      }));
+    if (!rec.license) {
+      rec.license = license;
+      await saveOrder(rec);
+    }
+    res.json({ ok: true, license, tier: rec.tier, orderId: rec.id });
+  } catch (e) {
+    console.error(e);
+    res
+      .status(500)
+      .json({ ok: false, error: e.message || "RESTORE_FAILED" });
   }
 });
 
@@ -623,6 +809,10 @@ app.post("/api/promos/compute", async (req, res) => {
 // ---------- START ----------
 await initDb().catch((e) => {
   console.error("DB init failed:", e);
+  process.exit(1);
+});
+await initOrdersTable().catch((e) => {
+  console.error("Orders table init failed:", e);
   process.exit(1);
 });
 

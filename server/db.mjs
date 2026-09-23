@@ -11,6 +11,12 @@ export const pool = new Pool({
     : undefined,
 });
 
+// Neon/serverless Postgres закриває простоюючі з'єднання — без цього обробника
+// подія 'error' на idle-клієнті завершує процес.
+pool.on("error", (err) => {
+  console.error("pg pool idle client error:", err.message);
+});
+
 export async function query(text, params) {
   const res = await pool.query(text, params);
   return res;
