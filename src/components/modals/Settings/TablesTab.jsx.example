@@ -1,0 +1,27 @@
+// Example tables tab: maps table -> controller + channel (0-based)
+import React from "react";
+import { useRtStore } from "../../../hooks/useRtStore";
+import { rtStore } from "../../../state/rtStore";
+
+export default function TablesTabExample() {
+  const { tables, controllers } = useRtStore();
+  function onChange(idx, field, value) {
+    const next = [...tables];
+    next[idx] = { ...next[idx], [field]: value };
+    rtStore.setTables(next);
+  }
+  return (
+    <div>
+      {(tables||[]).map((t, idx) => (
+        <div key={t.id||idx}>
+          <input value={t.name||""} onChange={e => onChange(idx, "name", e.target.value)} />
+          <select value={t.controllerId||""} onChange={e => onChange(idx, "controllerId", e.target.value)}>
+            <option value="">— Контролер —</option>
+            {(controllers||[]).map(c => <option key={c.id} value={c.id}>{c.name||c.espIP||c.ip}</option>)}
+          </select>
+          <input type="number" min="0" max="15" value={t.channel||0} onChange={e => onChange(idx, "channel", Number(e.target.value)||0)} />
+        </div>
+      ))}
+    </div>
+  );
+}

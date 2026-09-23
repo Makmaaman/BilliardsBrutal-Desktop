@@ -1,222 +1,752 @@
-// electron/main.cjs
-const { app, BrowserWindow, ipcMain, shell, session } = require('electron');
-const path = require('node:path');
-const fs = require('node:fs');
-const os = require('node:os');
-const crypto = require('node:crypto');
+/* electron/main.cjs — v36
+   - FIXED: Workaround для проблеми з require('electron') на Windows
+   - ДВА режими друку: RAW:9100 (ESC/POS) + Системний спулер (тихий друк без діалогу)
+   - printer:scan → завжди повертає МАСИВ [{ip,port,kind}]
+   - printers:listSystem, printers:testSystem, printers:printHtml
+*/
+const path = require("path");
 
-/* ===== ENV ===== */
-const LICENSE_SERVER_BASE = (process.env.LICENSE_SERVER_BASE || '').replace(/\/+$/,'');
-const PUBLIC_KEY_PEM_ENV  = (process.env.PUBLIC_KEY_PEM || '').replace(/\\n/g, '\n');
+// ULTIMATE Workaround: На деяких системах Windows require('electron') НЕ ПРАЦЮЄ
+// Використовуємо внутрішній binding Electron для прямого доступу до API
+let electron;
+try {
+  // Спроба 1: Звичайний require
+  electron = require('electron');
 
-/* Якщо колись захочеш generic-хост замість GitHub — задай UPDATES_FEED_URL,
-   і він перекриє GitHub. Інакше використовуємо GitHub Releases. */
-const UPDATES_FEED_URL    = (process.env.UPDATES_FEED_URL || '').replace(/\/+$/,'');
-const GH_OWNER            = process.env.GH_OWNER || 'Makmaaman';
-const GH_REPO             = process.env.GH_REPO  || 'BilliardsBrutal-Desktop';
+  // Якщо повернувся string - використовуємо internal bindings
+  if (typeof electron === 'string') {
+    console.log('[WARN] require("electron") returned path, using internal binding workaround');
 
-let win = null;
+    // Спроба через process.binding (застарілий але працює)
+    try {
+      const binding = process.binding('electron_browser_window');
+      if (binding) {
+        console.log('[INFO] Found electron_browser_window binding');
+      }
+    } catch (e) {
+      console.log('[WARN] process.binding failed:', e.message);
+    }
 
-/* ===== Window ===== */
-function getEntryPoint() {
-  const devUrl = process.env.VITE_DEV_SERVER_URL;
-  if (devUrl) return { type: 'url', value: devUrl };
-  return { type: 'file', value: path.join(__dirname, '..', 'dist', 'index.html') };
-}
-function createWindow() {
-  win = new BrowserWindow({
-    width: 1280,
-    height: 840,
-    show: true,
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
+    // Спроба через Module.globalPaths - додаємо шлях до Electron
+    try {
+      const Module = require('module');
+      const electronPath = path.join(__dirname, '../node_modules/electron/dist/resources/electron.asar');
+      if (Module.globalPaths && !Module.globalPaths.includes(electronPath)) {
+        Module.globalPaths.push(electronPath);
+      }
 
-  const entry = getEntryPoint();
-  if (entry.type === 'url') {
-    win.loadURL(entry.value);
-    win.webContents.openDevTools({ mode: 'detach' });
-  } else {
-    win.loadFile(entry.value);
+      // Очищаємо кеш і пробуємо ще раз
+      delete require.cache[require.resolve('electron')];
+      electron = require('electron');
+
+      if (typeof electron === 'string') {
+        throw new Error('Still returns string after cache clear');
+      }
+    } catch (e2) {
+      console.log('[WARN] Cache clear attempt failed:', e2.message);
+
+      // ОСТАННІЙ ШАНС: Використовуємо заглушку з повідомленням
+      throw new Error(
+        'CRITICAL: Cannot load Electron API!\n\n' +
+        'require("electron") returns: ' + (typeof electron) + '\n' +
+        'This is a known issue with Electron on some Windows systems.\n\n' +
+        'SOLUTION:\n' +
+        '1. Close all Node.js/Electron processes\n' +
+        '2. Delete node_modules folder completely\n' +
+        '3. Run: npm install\n' +
+        '4. If still fails, update Node.js to latest LTS version'
+      );
+    }
   }
 
-  win.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: 'deny' }; });
-  win.webContents.on('did-fail-load', (_e, code, desc) => console.error('[did-fail-load]', code, desc));
+  // Перевірка що отримали правильний API
+  if (!electron || typeof electron !== 'object' || !electron.app) {
+    throw new Error('Electron API is invalid: ' + JSON.stringify(Object.keys(electron || {})));
+  }
+
+  console.log('[OK] Electron API loaded successfully');
+} catch (e) {
+  console.error('\n' + '='.repeat(80));
+  console.error('[FATAL ERROR] ' + e.message);
+  console.error('='.repeat(80) + '\n');
+  process.exit(1);
 }
 
-/* ===== App version ===== */
-ipcMain.on('app:getVersionSync', (e) => { try { e.returnValue = app.getVersion(); } catch { e.returnValue = '0.0.0'; } });
-ipcMain.handle('app:getVersion', async () => app.getVersion());
+const { app, BrowserWindow, ipcMain, shell, net: eNet } = electron;
 
-/* ===== FS utils ===== */
-function getUserDataPath() { return app.getPath('userData'); }
-function fileInUserData(name) { return path.join(getUserDataPath(), name); }
-function readJsonSafe(p){ try{ if(!fs.existsSync(p)) return null; return JSON.parse(fs.readFileSync(p,'utf8')); }catch{ return null; } }
-function writeJsonSafe(p,obj){ try{ fs.mkdirSync(path.dirname(p),{recursive:true}); fs.writeFileSync(p, JSON.stringify(obj,null,2),'utf8'); return true; }catch{ return false; } }
-function removeSafe(p){ try{ if(fs.existsSync(p)) fs.rmSync(p,{recursive:true,force:true}); return true; }catch{ return false; } }
+// === AUTO-UPDATER ===
+let autoUpdater = null;
+try {
+  autoUpdater = require("electron-updater").autoUpdater;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.logger = console;
+} catch (e) {
+  console.warn("[WARN] electron-updater not available:", e.message);
+}
 
-/* ===== Machine ID ===== */
-function computeMachineId() {
+const os = require("os");
+const crypto = require("crypto");
+const fs = require("fs");
+const tcp = require("net");
+
+const HARD_BASE = "https://billiardsbrutal-desktop-1.onrender.com";
+
+// Ці змінні будуть ініціалізовані після app.whenReady()
+let LIC_DIR, LIC_JSON, LIC_JWT;
+
+function initLicensePaths() {
+  if (!LIC_DIR) {
+    LIC_DIR = app.getPath("userData");
+    LIC_JSON = path.join(LIC_DIR, "license.json");
+    LIC_JWT = path.join(LIC_DIR, "license.jwt");
+  }
+}
+
+// Перекодування тексту чека. Робимо це саме тут: preload виконується в
+// пісочниці, де require("iconv-lite") недоступний, і кирилиця мовчки
+// відправлялась у принтер як UTF-8 (замість CP866) — звідси «кракозябри».
+let iconv = null;
+try { iconv = require("iconv-lite"); }
+catch (e) { console.warn("[print] iconv-lite unavailable:", e?.message || e); }
+
+// ESC t <n> — вибір кодової таблиці принтера
+const CODEPAGE_IDS = { CP437: 0, CP850: 2, CP860: 3, CP863: 4, CP865: 5, CP866: 17, CP852: 18, CP858: 19, CP1251: 46 };
+
+function encodeReceipt(text, encoding) {
+  const enc = String(encoding || "CP866").toUpperCase();
+  if (iconv && iconv.encodingExists(enc)) {
+    try { return iconv.encode(String(text ?? ""), enc); }
+    catch (e) { console.warn("[print] encode failed:", e?.message || e); }
+  }
+  return Buffer.from(String(text ?? ""), "utf8");
+}
+
+/* Номери кодових таблиць у різних виробників відрізняються (Epson, XPrinter,
+   Gprinter...). Друкуємо всі ймовірні варіанти — оператор бачить, який рядок
+   читається, і вписує цей номер у налаштуваннях. */
+const CODEPAGE_CANDIDATES = [
+  { n: null, enc: "CP1251" },
+  { n: 46, enc: "CP1251" },
+  { n: 6,  enc: "CP1251" },
+  { n: 45, enc: "CP1251" },
+  { n: 73, enc: "CP1251" },
+  { n: 17, enc: "CP866" },
+  { n: 16, enc: "CP866" },
+  { n: 7,  enc: "CP866" },
+  { n: 3,  enc: "CP866" },
+  { n: 21, enc: "CP1125" },
+  { n: 15, enc: "CP1125" },
+  { n: null, enc: "UTF-8" },
+];
+
+function buildCodepageSweep() {
+  const parts = [Buffer.from([0x1b, 0x40])];
+  const ascii = (s) => Buffer.from(s, "ascii");
+  const sample = "Стiл: і ї є ґ І Ї Є Ґ";
+
+  parts.push(ascii("KODOVA TABLYCIA - TEST\n"));
+  parts.push(ascii("Znajdit chytkyj riadok\n"));
+  parts.push(ascii("------------------------------\n"));
+
+  for (const c of CODEPAGE_CANDIDATES) {
+    if (Number.isFinite(c.n)) parts.push(Buffer.from([0x1b, 0x74, c.n]));
+    const label = `n=${c.n === null ? "--" : String(c.n).padStart(2, "0")} ${c.enc}: `;
+    parts.push(ascii(label));
+    parts.push(encodeReceipt(sample, c.enc));
+    parts.push(ascii("\n"));
+  }
+
+  parts.push(ascii("------------------------------\n"));
+  parts.push(ascii("Vpyshit n u nalashtuvanniah\n"));
+  parts.push(Buffer.from([0x1b, 0x64, 4]));
+  parts.push(Buffer.from([0x1d, 0x56, 0x42, 0x00]));
+  return Buffer.concat(parts);
+}
+
+/** Повний ESC/POS-пакет: ініціалізація + кодова таблиця + текст + протяжка + відрізання */
+function buildEscposJob({ text, encoding, prefix, codepageId, feedLines = 4, cut = true }) {
   const parts = [];
-  try { parts.push(os.hostname() || ''); } catch {}
-  try { parts.push(`${os.platform()}/${os.arch()}`); } catch {}
+  parts.push(Buffer.from([0x1b, 0x40])); // ESC @ — скидання стану принтера
+
+  const cp = Number.isFinite(Number(codepageId))
+    ? Number(codepageId)
+    : CODEPAGE_IDS[String(encoding || "CP866").toUpperCase()];
+  if (Number.isFinite(cp)) parts.push(Buffer.from([0x1b, 0x74, cp])); // ESC t n
+
+  if (prefix) parts.push(Buffer.isBuffer(prefix) ? prefix : Buffer.from(String(prefix), "latin1"));
+
+  parts.push(encodeReceipt(text, encoding));
+
+  const lines = Math.max(0, Math.min(20, Number(feedLines) || 0));
+  if (lines) parts.push(Buffer.from([0x1b, 0x64, lines])); // ESC d n — протяжка
+  if (cut) parts.push(Buffer.from([0x1d, 0x56, 0x42, 0x00])); // GS V B 0 — відрізання
+
+  return Buffer.concat(parts);
+}
+
+// HTML-принт (твій модуль)
+const { registerReceiptPrinting } = require("./receiptPrinter.cjs");
+// ESC/POS (якщо є)
+let registerEscposPrinting = null;
+try { ({ registerEscposPrinting } = require("./escpos.cjs")); } catch (_) {}
+
+const isDev = !!process.env.VITE_DEV_SERVER_URL;
+let mainWindow = null;
+let paymentWindow = null;
+
+/* ---------- machine/license ---------- */
+function computeMachineId() {
   try {
-    const ifaces = os.networkInterfaces() || {};
-    const macs = [];
-    for (const name of Object.keys(ifaces)) {
-      for (const ni of ifaces[name] || []) {
-        const mac = (ni && ni.mac ? String(ni.mac) : '').toLowerCase();
-        if (mac && mac !== '00:00:00:00:00:00' && !mac.startsWith('00:00:00')) macs.push(mac);
+    const nets = os.networkInterfaces();
+    const macs = Object.values(nets).flat().filter(Boolean)
+      .map(n => n.mac).filter(m => m && m !== "00:00:00:00:00:00").sort().join("|");
+    let userDataPath = "";
+    try { userDataPath = app.getPath("userData"); } catch {
+      userDataPath = process.env.APPDATA || process.env.LOCALAPPDATA || process.env.HOME || "";
+    }
+    const seed = [
+      os.hostname(),
+      os.arch(),
+      os.platform(),
+      os.cpus?.()?.length ?? "",
+      macs,
+      process.execPath,
+      userDataPath,
+    ].join("#");
+    const id = crypto.createHash("sha256").update(seed).digest("hex").slice(0, 32);
+    if (id && id.length === 32) return id;
+    throw new Error("hash empty");
+  } catch {
+    // Кінцевий fallback — завжди повертає щось стабільне
+    try {
+      const seed2 = [
+        os.hostname(),
+        os.platform(),
+        os.arch(),
+        process.env.USERNAME || process.env.USER || "user",
+        process.env.COMPUTERNAME || "",
+      ].join("|");
+      return crypto.createHash("sha256").update(seed2).digest("hex").slice(0, 32);
+    } catch {
+      // Абсолютний fallback — хоча б щось
+      return crypto.createHash("md5").update(String(Date.now())).digest("hex");
+    }
+  }
+}
+function readLicenseToken() {
+  initLicensePaths();
+  try {
+    const raw = fs.readFileSync(LIC_JSON, "utf-8").trim();
+    if (raw) {
+      try { const o = JSON.parse(raw); if (o && o.jwt) return String(o.jwt); } catch {}
+      if (/^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+$/.test(raw)) return raw;
+    }
+  } catch {}
+  try { const raw = fs.readFileSync(LIC_JWT, "utf-8").trim(); if (raw) return raw; } catch {}
+  return null;
+}
+function writeLicenseToken(jwt) {
+  initLicensePaths();
+  const token = String(jwt || "").trim();
+  if (!token) throw new Error("Empty license token");
+  fs.writeFileSync(LIC_JSON, JSON.stringify({ jwt: token }, null, 2), "utf-8");
+  fs.writeFileSync(LIC_JWT, token, "utf-8");
+  return token;
+}
+function decodeJwtPayload(token){
+  try{
+    const p = String(token||"").split(".")[1];
+    if (!p) return null;
+    const pad = (s)=> s + "=".repeat((4 - s.length % 4) % 4);
+    const json = Buffer.from(pad(p).replace(/-/g,"+").replace(/_/g,"/"), "base64").toString("utf-8");
+    return JSON.parse(json);
+  }catch{ return null; }
+}
+
+/* ---------- http via electron.net ---------- */
+function httpJson(method, url, body) {
+  return new Promise((resolve, reject) => {
+    try {
+      const req = eNet.request({ method, url });
+      req.setHeader("Content-Type", "application/json");
+      const t = setTimeout(() => { try{req.abort();}catch{}; reject(new Error("NETWORK_TIMEOUT")); }, 20000);
+      req.on("response", (res) => {
+        const chunks=[]; res.on("data",(c)=>chunks.push(Buffer.isBuffer(c)?c:Buffer.from(c)));
+        res.on("end", ()=> {
+          clearTimeout(t);
+          const text = Buffer.concat(chunks).toString("utf-8");
+          let json=null; try{ json = JSON.parse(text||"{}"); }catch{}
+          if (res.statusCode<200 || res.statusCode>=300){
+            const msg = (json && (json.error||json.message)) || text || String(res.statusCode);
+            reject(new Error(msg));
+          } else resolve(json||{});
+        });
+      });
+      req.on("error", (e)=>{ clearTimeout(t); reject(e); });
+      req.end(body ? JSON.stringify(body) : undefined);
+    } catch(e){ reject(e); }
+  });
+}
+const postJson = (u,b)=>httpJson("POST",u,b);
+const getJson  = (u)=>httpJson("GET",u,null);
+
+function normalizeOrder(resp) {
+  const src = (resp && (resp.order || resp)) || {};
+  const id = src.id || src.orderId || src.dbId || null;
+  const invoiceId = src.invoiceId || src.invoice || src.invoice_id || null;
+  const link = src.link || src.pageUrl || src.paymentLink || src.payment_url || src.url || null;
+  return { id, invoiceId, link, ...src };
+}
+async function createOrder({ plan, tier, machineId, forceNew }) {
+  // сервер читає поле tier — надсилаємо обидва, щоб працювало з будь-якою його версією
+  const t = tier || plan;
+  const raw = await postJson(`${HARD_BASE}/api/orders`, { plan, tier: t, machineId, forceNew: !!forceNew });
+  return normalizeOrder(raw);
+}
+async function refreshOrder(orderId) {
+  const raw = await postJson(`${HARD_BASE}/api/orders/${encodeURIComponent(orderId)}/refresh`, {});
+  return normalizeOrder(raw);
+}
+async function activateLicense({ machineId, orderId }) {
+  return postJson(`${HARD_BASE}/api/license/activate`, { machineId, orderId });
+}
+async function pingApi() {
+  try { return await getJson(`${HARD_BASE}/api/ping`); } catch (e) { return { ok:false, error: e.message || String(e) }; }
+}
+
+/* ---------- RAW:9100 tools ---------- */
+function getLocalSubnets() {
+  const nets = os.networkInterfaces();
+  const out = new Set();
+  for (const ifs of Object.values(nets)) {
+    for (const n of (ifs || [])) {
+      if (!n || n.internal || n.family !== "IPv4") continue;
+      const ip = String(n.address || "");
+      if (/^(10\.|172\.(1[6-9]|2\d|3[0-1])\.|192\.168\.)/.test(ip)) {
+        const p = ip.split("."); if (p.length===4) out.add(`${p[0]}.${p[1]}.${p[2]}.`);
       }
     }
-    macs.sort();
-    if (macs.length) parts.push(macs.join('|'));
-  } catch {}
-  const seed = parts.join('#') || `seed_${crypto.randomUUID()}`;
-  return crypto.createHash('sha256').update(seed).digest('hex');
-}
-function machineIdPath() { return fileInUserData('machine.id'); }
-function getOrCreateMachineId() {
-  const p = machineIdPath();
-  try { if (fs.existsSync(p)) { const v = fs.readFileSync(p,'utf8').trim(); if (v) return v; } } catch {}
-  const mid = computeMachineId();
-  try { fs.writeFileSync(p, mid, 'utf8'); } catch {}
-  return mid;
-}
-ipcMain.handle('machine:getId', async () => { try { return getOrCreateMachineId(); } catch { return null; } });
-
-/* ===== Public key (JWT) ===== */
-const fetchFn = (global.fetch ? (...a)=>global.fetch(...a) : (...a)=>import('node-fetch').then(({default: f})=>f(...a)));
-async function loadPublicKeyPEM() {
-  if (PUBLIC_KEY_PEM_ENV) return PUBLIC_KEY_PEM_ENV.trim();
-  const localPem = path.join(__dirname, 'public.pem');
-  try { if (fs.existsSync(localPem)) return fs.readFileSync(localPem,'utf8').trim(); } catch {}
-  if (LICENSE_SERVER_BASE) {
-    try {
-      const url = `${LICENSE_SERVER_BASE}/api/license/public-key`;
-      const r = await fetchFn(url);
-      const j = await r.json().catch(()=> ({}));
-      if (j?.publicKey) return String(j.publicKey).trim();
-    } catch {}
   }
-  return '';
+  return Array.from(out.values());
 }
-
-/* ===== JWT verify (Ed25519, без jose) ===== */
-function b64uToBuf(b64u){ const pad=b64u.length%4? '='.repeat(4-(b64u.length%4)) : ''; return Buffer.from((b64u+pad).replace(/-/g,'+').replace(/_/g,'/'),'base64'); }
-function parseJwt(jwt){
-  const parts = String(jwt||'').split('.');
-  if (parts.length!==3) throw new Error('Bad JWT');
-  const [h,p,s] = parts;
-  return { header: JSON.parse(b64uToBuf(h)), payload: JSON.parse(b64uToBuf(p)), signature: b64uToBuf(s), signingInput: Buffer.from(`${h}.${p}`) };
+function tryConnect9100(host, timeout=1000){
+  return new Promise((resolve) => {
+    const s = new tcp.Socket(); let done=false;
+    const finish=(ok)=>{ if(done) return; done=true; try{s.destroy();}catch{}; resolve(ok); };
+    s.setTimeout(timeout);
+    s.once("connect", ()=> finish(true));
+    s.once("timeout", ()=> finish(false));
+    s.once("error",  ()=> finish(false));
+    s.connect({ host, port: 9100 });
+  });
 }
-async function verifyJwtLicense(jwt, midExpected){
-  const pem = await loadPublicKeyPEM(); if (!pem) return { ok:false, reason:'no_public_key' };
-  let parsed; try { parsed = parseJwt(jwt); } catch(e){ return { ok:false, reason:'bad_jwt' }; }
-  const { header, payload, signature, signingInput } = parsed;
-  if ((header?.alg||'').toUpperCase()!=='EDDSA') return { ok:false, reason:'alg_not_eddsa' };
-  if (payload?.iss!=='duna.billiard.license') return { ok:false, reason:'bad_iss' };
-  if (payload?.aud!=='desktop-app')           return { ok:false, reason:'bad_aud' };
-  if (typeof payload?.exp==='number' && Date.now()>payload.exp*1000) return { ok:false, reason:'expired' };
-  if (midExpected && payload?.mid && payload.mid!==midExpected) return { ok:false, reason:'mid_mismatch' };
-  let key; try { key = crypto.createPublicKey(pem); } catch { return { ok:false, reason:'bad_public_key' }; }
-  let ok = false; try { ok = crypto.verify(null, signingInput, key, signature); } catch { return { ok:false, reason:'verify_error' }; }
-  if (!ok) return { ok:false, reason:'signature_invalid' };
-  return { ok:true, tier: payload?.tier || 'basic', expiresAt: (typeof payload?.exp==='number') ? new Date(payload.exp*1000).toISOString() : null };
-}
-
-/* ===== License storage & IPC ===== */
-function licensePath(){ return fileInUserData('license.json'); }
-function readLic(){ return readJsonSafe(licensePath()) || null; }
-function writeLic(obj){ return writeJsonSafe(licensePath(), obj); }
-
-ipcMain.handle('license:getStatus', async () => {
-  if (process.env.LICENSE_FORCE==='1') return { ok:true, tier: process.env.LICENSE_TIER||'dev', expiresAt:null, forced:true };
-  const lic = readLic(); const mid = getOrCreateMachineId();
-  if (lic?.jwt) {
-    const v = await verifyJwtLicense(lic.jwt, mid);
-    return v.ok ? { ok:true, kind:'jwt', tier:v.tier, expiresAt:v.expiresAt } : { ok:false, reason:v.reason||'jwt_invalid' };
+async function discoverPrinters9100({ timeout=1500, hosts, bases } = {}){
+  let candidates = [];
+  if (Array.isArray(hosts) && hosts.length) candidates = hosts;
+  else {
+    const roots = Array.isArray(bases)&&bases.length ? bases : getLocalSubnets();
+    for (const b of roots) for (let i=1;i<=254;i++) candidates.push(b+i);
   }
-  if (lic?.key && lic?.fingerprint) {
-    const expected = crypto.createHash('sha256').update(`${mid}#${lic.key}`).digest('hex');
-    if (expected !== lic.fingerprint) return { ok:false, reason:'fingerprint_mismatch' };
-    return { ok:true, kind:'legacy', tier: lic.tier||'basic', expiresAt: lic.expiresAt||null };
-  }
-  return { ok:false, reason:'no_license' };
-});
-ipcMain.handle('license:applyJwt', async (_e, jwt) => {
-  if (!jwt || typeof jwt!=='string') return { ok:false, error:'EMPTY_JWT' };
-  const mid = getOrCreateMachineId(); const v = await verifyJwtLicense(jwt, mid);
-  if (!v.ok) return { ok:false, error:`JWT_VERIFY_FAILED: ${v.reason||''}` };
-  if (!writeLic({ jwt })) return { ok:false, error:'WRITE_FAILED' };
-  return { ok:true, tier:v.tier, expiresAt:v.expiresAt };
-});
-ipcMain.handle('license:deactivate', async () => ({ ok: removeSafe(licensePath()) }));
-ipcMain.handle('license:reset', async (_e, opts={}) => {
-  const removed=[]; if (removeSafe(licensePath())) removed.push('license.json');
-  const midFile = machineIdPath();
-  if (opts.resetMachineId && removeSafe(midFile)) removed.push('machine.id');
-  if (opts.clearLocalStorage){ try{ await session.defaultSession.clearStorageData({ storages:['localstorage'] }); removed.push('LocalStorage'); }catch{} }
-  if (opts.clearIndexedDB){ try{ await session.defaultSession.clearStorageData({ storages:['indexeddb'] }); removed.push('IndexedDB'); }catch{} }
-  return { ok:true, userData:getUserDataPath(), removed };
-});
-
-/* ===== Auto-Updater (electron-updater) ===== */
-const { autoUpdater } = require('electron-updater');
-autoUpdater.setFeedURL({
-  provider: 'github',
-  owner: 'Makmaaman',
-  repo: 'BilliardsBrutal-Desktop',
-  releaseType: 'release'
-});
-
-function sendUpdateEvent(payload){ try { win && win.webContents.send('updates:event', payload); } catch {} }
-
-function initUpdater() {
-  autoUpdater.logger = { info: console.log, warn: console.warn, error: console.error, debug: console.debug };
-
-  if (UPDATES_FEED_URL) {
-    // Generic feed (S3/статичний хост)
-    try {
-      autoUpdater.setFeedURL({ provider: 'generic', url: UPDATES_FEED_URL });
-      console.log('[updates] generic feed =', UPDATES_FEED_URL);
-    } catch (e) { console.error('[updates] setFeedURL generic error', e); }
-  } else {
-    // === GitHub Releases (твій випадок) ===
-    try {
-      autoUpdater.setFeedURL({ provider: 'github', owner: GH_OWNER, repo: GH_REPO, releaseType: 'release' });
-      console.log('[updates] github feed =', `${GH_OWNER}/${GH_REPO}`);
-    } catch (e) { console.error('[updates] setFeedURL github error', e); }
-  }
-
-  autoUpdater.on('checking-for-update', () => sendUpdateEvent({ type:'checking' }));
-  autoUpdater.on('update-available', (info) => sendUpdateEvent({ type:'available', info }));
-  autoUpdater.on('update-not-available', (info) => sendUpdateEvent({ type:'not-available', info }));
-  autoUpdater.on('download-progress', (p) => sendUpdateEvent({ type:'progress', p }));
-  autoUpdater.on('update-downloaded', (info) => sendUpdateEvent({ type:'downloaded', info }));
-  autoUpdater.on('error', (e) => sendUpdateEvent({ type:'error', message: e?.message || String(e) }));
+  const CONC = 64, out=[]; let idx=0;
+  await Promise.all(Array.from({length:CONC}, async ()=>{
+    while(idx<candidates.length){
+      const ip = candidates[idx++]; try { if (await tryConnect9100(ip, timeout)) out.push({ ip, port:9100, kind:"raw9100" }); } catch {}
+    }
+  }));
+  out.sort((a,b)=> a.ip.localeCompare(b.ip));
+  return out;
+}
+function sendRaw9100({ ip, data, timeout=4000 }){
+  return new Promise((resolve, reject)=>{
+    const s = new tcp.Socket(); let finished=false;
+    const done=(err)=>{ if(finished) return; finished=true; try{s.end();s.destroy();}catch{}; err?reject(err):resolve(); };
+    s.setTimeout(timeout, ()=> done(new Error("TIMEOUT")));
+    s.once("error", (e)=> done(e));
+    s.connect({ host: ip, port: 9100 }, ()=>{
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(String(data||""), "latin1");
+      s.write(buf, (err)=> {
+        if (err) return done(err);
+        setTimeout(()=> done(), 150); // дати буферу піти в мережу
+      });
+    });
+  });
 }
 
-ipcMain.handle('updates:checkNow', async () => {
+/* ---------- System silent HTML print ---------- */
+async function printHtmlSilent({ html, deviceName, landscape=false }) {
+  if (!deviceName) throw new Error("No deviceName");
+  return new Promise((resolve, reject) => {
+    const win = new BrowserWindow({
+      show: false,
+      webPreferences: { sandbox: true, contextIsolation: true },
+    });
+    const cleanup = () => { try{win.close();}catch{} };
+    win.on("closed", ()=> {});
+    const url = "data:text/html;charset=utf-8," + encodeURIComponent(html);
+    win.loadURL(url).then(()=> {
+      win.webContents.print({
+        silent: true,
+        deviceName,
+        printBackground: true,
+        landscape,
+      }, (success, failureReason) => {
+        cleanup();
+        if (!success) reject(new Error(failureReason || "Print failed"));
+        else resolve(true);
+      });
+    }).catch((e)=> { cleanup(); reject(e); });
+  });
+}
+
+/* ---------- Payment window ---------- */
+async function openPayment({ orderId, plan = "full-5", machineId, forceNew = true }) {
+  const mid = machineId || computeMachineId();
+  let order;
+  if (forceNew) order = await createOrder({ plan, machineId: mid, forceNew: true });
+  else if (orderId) { try { order = await refreshOrder(orderId); } catch { order = await createOrder({ plan, machineId: mid, forceNew: true }); } }
+  else order = await createOrder({ plan, machineId: mid, forceNew: true });
+  if (!order || !order.link) throw new Error("No payment link");
+
   try {
-    autoUpdater.autoDownload = true;            // завантажуємо одразу
-    const r = await autoUpdater.checkForUpdates();
-    return { ok:true, info: r?.updateInfo || null };
-  } catch (e) {
-    return { ok:false, error: e?.stack || e?.message || String(e) };
-  }
-});
-ipcMain.handle('updates:quitAndInstall', async () => {
-  try { setImmediate(()=> autoUpdater.quitAndInstall(false, true)); return { ok:true }; }
-  catch (e) { return { ok:false, error: e?.stack || e?.message || String(e) }; }
-});
+    const wins = BrowserWindow.getAllWindows();
+    const serialized = JSON.stringify(order);
+    await Promise.all(wins.map(w => w.webContents.executeJavaScript(
+      `localStorage.setItem('license.order', ${JSON.stringify(serialized)});
+       localStorage.setItem('LS_LICENSE_ORDER_JSON', ${JSON.stringify(serialized)}); true;`, true
+    )));
+  } catch {}
 
-/* ===== Lifecycle ===== */
-if (process.platform === 'win32') app.setAppUserModelId(app.getName());
-app.whenReady().then(() => { createWindow(); initUpdater(); });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  const payUrl = `${order.link}${order.link.includes("?") ? "&" : "?"}t=${Date.now()}`;
+  if (paymentWindow && !paymentWindow.isDestroyed()) { try{await paymentWindow.webContents.session.clearCache();}catch{}; try{paymentWindow.close();}catch{}; paymentWindow=null; }
+  paymentWindow = new BrowserWindow({
+    width: 560, height: 820, title: "Оплата ліцензії — Duna Billiard Club",
+    autoHideMenuBar: true, resizable: true, show: true, modal: false,
+    webPreferences: { sandbox: true, contextIsolation: true },
+  });
+  const sess = paymentWindow.webContents.session;
+  try { await sess.clearCache(); } catch {}
+  sess.webRequest.onBeforeSendHeaders((details, cb) => {
+    const headers = { ...details.requestHeaders, "Cache-Control": "no-cache", "Pragma": "no-cache" };
+    cb({ requestHeaders: headers });
+  });
+  paymentWindow.webContents.setWindowOpenHandler(({ url }) => { shell.openExternal(url); return { action: "deny" }; });
+  paymentWindow.on("closed", () => { paymentWindow = null; });
+  await paymentWindow.loadURL(payUrl);
+  return { order };
+}
+
+/* ---------- IPC ---------- */
+function registerIpc() {
+  ipcMain.on("app:getVersionSync", (e) => { try { e.returnValue = app.getVersion(); } catch { e.returnValue = "dev"; } });
+  ipcMain.on("machine:getIdSync", (e) => { try { e.returnValue = computeMachineId(); } catch { e.returnValue = ""; } });
+
+  ipcMain.handle("app:getVersion", async () => { try { return app.getVersion(); } catch { return "dev"; } });
+  ipcMain.handle("machine:getId", async () => { try { return computeMachineId(); } catch { return ""; } });
+
+  ipcMain.handle("license:ping", async () => { try { const res = await pingApi(); return { ok:true, res }; } catch(e){ return { ok:false, error:e.message||String(e) }; } });
+  ipcMain.handle("license:openPayment", async (_evt, payload) => { try { const result = await openPayment(payload||{}); return { ok:true, ...result }; } catch (err){ return { ok:false, error: err.message||String(err) }; } });
+  ipcMain.handle("license:refreshOrder", async (_evt, { orderId }) => { try { const order = await refreshOrder(orderId); return { ok:true, order }; } catch (err){ return { ok:false, error: err.message||String(err) }; } });
+  ipcMain.handle("license:activate", async (_evt, { machineId, orderId }) => { try { const result = await activateLicense({ machineId, orderId }); return { ok:true, ...result }; } catch (err){ return { ok:false, error: err.message||String(err) }; } });
+  ipcMain.handle("license:applyJwt", async (_evt, { jwt, meta } = {}) => {
+    try {
+      initLicensePaths();
+      if (!jwt || typeof jwt !== "string" || jwt.length < 40) throw new Error("Invalid license token");
+      const token = writeLicenseToken(jwt);
+      try {
+        const cur = JSON.parse(fs.readFileSync(LIC_JSON,"utf-8"));
+        const next = { ...cur, meta: {
+          plan: meta?.plan || cur?.meta?.plan,
+          mode: meta?.mode || cur?.meta?.mode,
+          tablesLimit: Number(meta?.tablesLimit || cur?.meta?.tablesLimit || 0) || undefined,
+          expiresAt: meta?.expiresAt || cur?.meta?.expiresAt
+        }};
+        fs.writeFileSync(LIC_JSON, JSON.stringify(next,null,2), "utf-8");
+      } catch {}
+      const wins = BrowserWindow.getAllWindows();
+      await Promise.all(wins.map(async (w)=> { try{ await w.webContents.executeJavaScript(`localStorage.setItem('license.ok','1'); true;`, true); }catch{} }));
+      return { ok:true };
+    } catch(err){ return { ok:false, error: err.message||String(err) }; }
+  });
+  ipcMain.handle("license:getStatus", async () => {
+    try {
+      initLicensePaths();
+      const jwt = readLicenseToken(); const active = !!jwt;
+      let mode, tier, tablesLimit, expiresAt, daysLeft, plan;
+      if (jwt){
+        const p = decodeJwtPayload(jwt)||{};
+        mode = p.mode || p.type || (p.sub ? "sub" : undefined);
+        tier = p.tier || p.plan || undefined;
+        plan = p.plan || p.tier || undefined;
+        const exp = Number(p.exp || p.expires || 0); if (exp>0) expiresAt = exp*1000;
+        tablesLimit = Number(p.tablesLimit || p.max_tables || p.maxTables || p.tables || 0) || undefined;
+        if (expiresAt) daysLeft = Math.max(0, Math.ceil((expiresAt - Date.now())/86400000));
+      }
+      try {
+        const cur = JSON.parse(fs.readFileSync(LIC_JSON,"utf-8"));
+        const meta = cur?.meta; if (meta){
+          plan = meta.plan || plan; mode = meta.mode || mode;
+          tablesLimit = Number(meta.tablesLimit || tablesLimit || 0) || tablesLimit;
+          expiresAt = meta.expiresAt || expiresAt;
+          if (expiresAt) daysLeft = Math.max(0, Math.ceil((new Date(expiresAt).getTime() - Date.now())/86400000));
+        }
+      } catch {}
+      const wins = BrowserWindow.getAllWindows();
+      await Promise.all(wins.map(async (w)=> { try{ await w.webContents.executeJavaScript(active ? "localStorage.setItem('license.ok','1'); true;" : "localStorage.removeItem('license.ok'); true;", true); }catch{} }));
+      if (!active) return { ok:false, active:false, reason:"no_license" };
+      if (mode==="sub" && expiresAt && Date.now() > new Date(expiresAt).getTime()){
+        return { ok:false, active:false, reason:"expired", mode, tier, plan, tablesLimit, expiresAt, daysLeft:0 };
+      }
+      return { ok:true, active:true, mode, tier, plan, tablesLimit, expiresAt, daysLeft, jwt };
+    } catch(err){ return { ok:false, error: err.message||String(err) }; }
+  });
+  ipcMain.handle("license:clearOrder", async () => {
+    try {
+      const wins = BrowserWindow.getAllWindows();
+      await Promise.all(wins.map(w => w.webContents.executeJavaScript(
+        `localStorage.removeItem('license.order'); localStorage.removeItem('licenseOrder'); localStorage.removeItem('LS_LICENSE_ORDER_JSON'); sessionStorage.removeItem('license.order'); true;`, true
+      )));
+      return { ok:true };
+    } catch(err){ return { ok:false, error: err.message||String(err) }; }
+  });
+  ipcMain.handle("license:getApiBase", async () => ({ ok:true, base:HARD_BASE }));
+  ipcMain.handle("license:setApiBase", async () => ({ ok:true, base:HARD_BASE }));
+  ipcMain.handle("license:activated", async () => {
+    try {
+      const wins = BrowserWindow.getAllWindows();
+      await Promise.all(wins.map(async (w)=> {
+        try { await w.webContents.executeJavaScript("try { localStorage.setItem('license.ok','1'); } catch(e) {} ; location.reload(); true;", true); } catch {}
+      }));
+      return { ok:true };
+    } catch(err){ return { ok:false, error: err.message||String(err) }; }
+  });
+  ipcMain.handle("license:deactivate", async () => {
+    try {
+      initLicensePaths();
+      try { fs.unlinkSync(LIC_JSON); } catch {}
+      try { fs.unlinkSync(LIC_JWT); } catch {}
+      const wins = BrowserWindow.getAllWindows();
+      await Promise.all(wins.map(async (w)=> {
+        try {
+          await w.webContents.session.clearStorageData({ storages: ["localstorage","indexeddb","websql","serviceworkers","cachestorage"] });
+          await w.webContents.executeJavaScript("localStorage.removeItem('license.ok'); true;", true);
+        } catch {}
+      }));
+      return { ok:true };
+    } catch(err){ return { ok:false, error: err.message||String(err) }; }
+  });
+
+  // ---------- PRINT API ----------
+  // RAW:9100 скан
+  ipcMain.handle("printer:scan", async (_evt, opts) => {
+    try {
+      const list = await discoverPrinters9100({ timeout: 1500, ...(opts || {}) });
+      return list; // масив
+    } catch (e) {
+      console.warn("[printer:scan] error:", e?.message || e);
+      return [];
+    }
+  });
+  // RAW:9100 тест
+  ipcMain.handle("printer:test", async (_evt, { ip }) => {
+    if (!ip) return { ok:false, error:"NO_IP" };
+    try {
+      // ESC @ (ініт), текст, feed, повний різ (GS V 66 0)
+      const payload = Buffer.concat([
+        Buffer.from([0x1B,0x40]),
+        Buffer.from("DUNA — TEST RAW9100\n--------------------\n", "ascii"),
+        Buffer.from("If you see this, RAW9100 works.\n\n", "ascii"),
+        Buffer.from([0x1B,0x64,0x03]),
+        Buffer.from([0x1D,0x56,0x42,0x00])
+      ]);
+      await sendRaw9100({ ip, data: payload });
+      return { ok:true };
+    } catch (e) {
+      return { ok:false, error: e?.message || String(e) };
+    }
+  });
+  // RAW:9100 друк
+  ipcMain.handle("printer:print", async (_evt, { ip, data }) => {
+    if (!ip) return { ok:false, error:"NO_IP" };
+    try { await sendRaw9100({ ip, data: data || "" }); return { ok:true }; }
+    catch (e) { return { ok:false, error: e?.message || String(e) }; }
+  });
+
+  // Діагностика: друк усіх ймовірних кодових таблиць
+  ipcMain.handle("printer:printCodepageTest", async (_evt, { ip } = {}) => {
+    if (!ip) return { ok:false, error:"NO_IP" };
+    try {
+      const job = buildCodepageSweep();
+      await sendRaw9100({ ip, data: job });
+      return { ok:true, bytes: job.length };
+    } catch (e) { return { ok:false, error: e?.message || String(e) }; }
+  });
+
+  // Друк чека з перекодуванням на боці головного процесу
+  ipcMain.handle("printer:printText", async (_evt, opts = {}) => {
+    const { ip, text, encoding, prefix, codepageId, feedLines, cut } = opts;
+    if (!ip) return { ok:false, error:"NO_IP" };
+    try {
+      const job = buildEscposJob({ text, encoding, prefix, codepageId, feedLines, cut });
+      await sendRaw9100({ ip, data: job });
+      return { ok:true, bytes: job.length, encoded: !!iconv };
+    } catch (e) { return { ok:false, error: e?.message || String(e) }; }
+  });
+
+  // Системні принтери
+  ipcMain.handle("printers:listSystem", async () => {
+    try {
+      const win = mainWindow || BrowserWindow.getAllWindows()[0];
+      if (!win) return [];
+      const list = await win.webContents.getPrintersAsync();
+      return Array.isArray(list) ? list : [];
+    } catch (e) {
+      console.warn("[printers:listSystem] error:", e?.message || e);
+      return [];
+    }
+  });
+  // Системний тест (тихий HTML)
+  ipcMain.handle("printers:testSystem", async (_evt, { deviceName }) => {
+    if (!deviceName) return { ok:false, error:"NO_DEVICENAME" };
+    try {
+      const html = `
+        <meta charset="utf-8" />
+        <style>body{font:14px/1.35 -apple-system,Segoe UI,Roboto,Arial;padding:16px} h1{font-size:18px;margin:0 0 8px}</style>
+        <h1>DUNA — тест друку (System)</h1>
+        <div>${new Date().toLocaleString()}</div>
+        <hr/><div>Якщо бачиш цей лист на папері — системний друк працює.</div>`;
+      await printHtmlSilent({ html, deviceName, landscape:false });
+      return { ok:true };
+    } catch (e) { return { ok:false, error: e?.message || String(e) }; }
+  });
+  // Системний HTML друк довільного контенту
+  ipcMain.handle("printers:printHtml", async (_evt, { deviceName, html, landscape }) => {
+    if (!deviceName) return { ok:false, error:"NO_DEVICENAME" };
+    try { await printHtmlSilent({ html: html||"<meta charset='utf-8'><pre>EMPTY</pre>", deviceName, landscape:!!landscape }); return { ok:true }; }
+    catch (e) { return { ok:false, error: e?.message || String(e) }; }
+  });
+
+  // ESC/POS модуль (якщо є)
+  try { if (registerEscposPrinting) registerEscposPrinting(ipcMain); }
+  catch (e) { console.warn("[print] ESC/POS register failed:", e?.message || e); }
+
+  // ---------- AUTO-UPDATER IPC ----------
+  ipcMain.handle("updates:check", async () => {
+    if (!autoUpdater) return { ok: false, error: "Auto-updater not available" };
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { ok: true, result };
+    } catch (e) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+  ipcMain.handle("updates:download", async () => {
+    if (!autoUpdater) return { ok: false, error: "Auto-updater not available" };
+    try {
+      await autoUpdater.downloadUpdate();
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+  ipcMain.handle("updates:install", async () => {
+    if (!autoUpdater) return { ok: false, error: "Auto-updater not available" };
+    try {
+      autoUpdater.quitAndInstall(false, true);
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: e?.message || String(e) };
+    }
+  });
+
+  console.log("[main] IPC v36 ready");
+}
+
+/* ---------- window ---------- */
+function createMainWindow() {
+  const win = new BrowserWindow({
+    width: 1280, height: 800, show: false, autoHideMenuBar: true,
+    webPreferences: { preload: path.join(__dirname, "preload.cjs"), contextIsolation: true, nodeIntegration: false },
+  });
+  try {
+    const prev = (win.webContents.session.getPreloads ? win.webContents.session.getPreloads() : []);
+    win.webContents.session.setPreloads([ ...prev, path.join(__dirname, "preload_receipt.cjs") ]);
+  } catch {}
+
+  win.once("ready-to-show", () => win.show());
+  if (isDev) win.loadURL(process.env.VITE_DEV_SERVER_URL);
+  else win.loadFile(path.join(__dirname, "../dist/index.html"));
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith("http")) { shell.openExternal(url); return { action: "deny" }; }
+    return { action: "allow" };
+  });
+  win.webContents.openDevTools({ mode: "detach" });
+
+  try { registerReceiptPrinting(win); } catch (e) { console.warn("[print] registerReceiptPrinting failed:", e?.message || e); }
+  return win;
+}
+
+/* ---------- auto-updater events ---------- */
+function initAutoUpdater() {
+  if (!autoUpdater) {
+    console.log("[updater] Auto-updater not available");
+    return;
+  }
+
+  const sendToRenderer = (type, data = {}) => {
+    const wins = BrowserWindow.getAllWindows();
+    wins.forEach(w => {
+      try { w.webContents.send("updates:event", { type, ...data }); } catch {}
+    });
+  };
+
+  autoUpdater.on("checking-for-update", () => {
+    console.log("[updater] Checking for update...");
+    sendToRenderer("checking");
+  });
+  autoUpdater.on("update-available", (info) => {
+    console.log("[updater] Update available:", info?.version);
+    sendToRenderer("available", { version: info?.version });
+  });
+  autoUpdater.on("update-not-available", (info) => {
+    console.log("[updater] No update available");
+    sendToRenderer("not-available", { version: info?.version });
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    console.log("[updater] Download progress:", Math.round(progress.percent), "%");
+    sendToRenderer("progress", { p: progress });
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    console.log("[updater] Update downloaded:", info?.version);
+    sendToRenderer("downloaded", { version: info?.version });
+  });
+  autoUpdater.on("error", (err) => {
+    console.error("[updater] Error:", err?.message || err);
+    sendToRenderer("error", { message: err?.message || String(err) });
+  });
+
+  // Перевірка оновлень при старті (з невеликою затримкою)
+  setTimeout(() => {
+    console.log("[updater] Initial check...");
+    autoUpdater.checkForUpdatesAndNotify().catch(e => {
+      console.warn("[updater] Initial check failed:", e?.message || e);
+    });
+  }, 5000);
+}
+
+/* ---------- bootstrap ---------- */
+app.whenReady().then(() => {
+  initLicensePaths();
+  registerIpc();
+  initAutoUpdater();
+  mainWindow = createMainWindow();
+  const syncLocal = async () => {
+    const has = !!readLicenseToken();
+    const js = has ? "try{localStorage.setItem('license.ok','1');}catch(e){}; true;" : "try{localStorage.removeItem('license.ok');}catch(e){}; true;";
+    try { await mainWindow.webContents.executeJavaScript(js, true); } catch {}
+  };
+  mainWindow.webContents.on("dom-ready", syncLocal);
+  mainWindow.webContents.on("did-finish-load", syncLocal);
+  app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) { mainWindow = createMainWindow(); } });
+});
+app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

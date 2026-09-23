@@ -1,0 +1,2 @@
+// src/auth/FirstRunLicense.jsx (коротка версія-маркер для App.jsx, повний файл у попередньому ZIP)
+export { default } from "./FirstRunLicense"; // тримач місця, якщо збирач кешує імпорт

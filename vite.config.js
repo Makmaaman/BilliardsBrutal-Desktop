@@ -1,8 +1,23 @@
-import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
-// ВАЖЛИВО: base './' — щоб у проді шляхи до assets були відносні
-export default defineConfig({
+const espIp = process.env.VITE_ESP_IP || '192.168.0.185';
+
+export default defineConfig(({ mode }) => ({
+  base: mode === 'development' ? '/' : './', // важливо для Electron (file://)
   plugins: [react()],
-  base: './',
-})
+  server: {
+    proxy: {
+      '/esp': {
+        target: `http://${espIp}`,
+        changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/esp/, ''),
+      },
+    },
+  },
+  build: {
+    outDir: 'dist',
+    assetsDir: 'assets',
+    sourcemap: false,
+  },
+}));

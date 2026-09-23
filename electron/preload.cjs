@@ -1,39 +1,89 @@
-// electron/preload.cjs
-const { contextBridge, ipcRenderer } = require('electron');
+// electron/preload.cjs — v36
+const { contextBridge, ipcRenderer } = require("electron");
 
-// Версія
-contextBridge.exposeInMainWorld('versions', {
-  app: () => { try { return ipcRenderer.sendSync('app:getVersionSync'); } catch { return '0.0.0'; } },
-  appAsync: () => ipcRenderer.invoke('app:getVersion'),
+// iconv-lite може бути недоступна в деяких збірках — грейсфульний fallback
+let iconv = null;
+try { iconv = require("iconv-lite"); } catch (e) { console.warn("[preload] iconv-lite unavailable:", e.message); }
+
+const invoke = (ch, payload) => ipcRenderer.invoke(ch, payload);
+
+// версії / машина / ліцензія
+contextBridge.exposeInMainWorld("versions", {
+  app: () => ipcRenderer.sendSync("app:getVersionSync") || "dev"
+});
+contextBridge.exposeInMainWorld("machine", { id: () => invoke("machine:getId") });
+
+contextBridge.exposeInMainWorld("license", {
+  getStatus: () => invoke("license:getStatus"),
+  openPayment: (payload) => invoke("license:openPayment", payload || {}),
+  refreshOrder: (orderId) => invoke("license:refreshOrder", { orderId }),
+  activate: (machineId, orderId) => invoke("license:activate", { machineId, orderId }),
+  clearOrder: () => invoke("license:clearOrder"),
+  applyJwt: (jwt, meta) => invoke("license:applyJwt", { jwt, meta }),
+  getApiBase: () => invoke("license:getApiBase"),
+  setApiBase: (base) => invoke("license:setApiBase", { base }),
+  activated: () => invoke("license:activated"),
+  deactivate: () => invoke("license:deactivate"),
+  ping: () => invoke("license:ping"),
 });
 
-// MACHINE
-contextBridge.exposeInMainWorld('machine', {
-  id: () => ipcRenderer.invoke('machine:getId'),
+// НОВЕ: принтери
+contextBridge.exposeInMainWorld("printers", {
+  // RAW:9100 (термопринтери)
+  scan: (opts) => invoke("printer:scan", opts || {}),                // => [{ip,port,kind}]
+  testRaw: (ip) => invoke("printer:test", { ip }),                   // => {ok}
+  printRaw: (ip, data) => invoke("printer:print", { ip, data }),     // => {ok}
+  // текст перекодовує головний процес (у preload iconv-lite недоступний)
+  printText: (opts) => invoke("printer:printText", opts || {}),      // => {ok,bytes}
+  printCodepageTest: (ip) => invoke("printer:printCodepageTest", { ip }), // => {ok}
+
+  // Системні (Windows/OS)
+  listSystem: () => invoke("printers:listSystem"),                   // => [{name,displayName,isDefault,isNetwork,options...}]
+  testSystem: (deviceName) => invoke("printers:testSystem", { deviceName }),
+  printHtml: (deviceName, html, landscape=false) => invoke("printers:printHtml", { deviceName, html, landscape }),
 });
 
-// Ліцензія
-contextBridge.exposeInMainWorld('license', {
-  getStatus: () => ipcRenderer.invoke('license:getStatus'),
-  applyJwt:  (jwt) => ipcRenderer.invoke('license:applyJwt', jwt),
-  deactivate: () => ipcRenderer.invoke('license:deactivate'),
-  reset: (opts) => ipcRenderer.invoke('license:reset', opts || {}),
+// AUTO-UPDATER API
+const updateListeners = new Set();
+ipcRenderer.on("updates:event", (_evt, data) => {
+  updateListeners.forEach(fn => { try { fn(data); } catch {} });
 });
 
-// ОНОВЛЕННЯ — рівно той API, що використовує твій фронт
-contextBridge.exposeInMainWorld('updates', {
-  on: (cb) => {
-    const l = (_e, payload) => cb && cb(payload);
-    ipcRenderer.on('updates:event', l);
-    return () => ipcRenderer.removeListener('updates:event', l);
+contextBridge.exposeInMainWorld("updates", {
+  // Підписка на події оновлення
+  on: (callback) => {
+    if (typeof callback === "function") {
+      updateListeners.add(callback);
+      return () => updateListeners.delete(callback);
+    }
+    return () => {};
   },
-  checkNow: () => ipcRenderer.invoke('updates:checkNow'),
-  quitAndInstall: () => ipcRenderer.invoke('updates:quitAndInstall'),
+  // Перевірити оновлення вручну
+  checkNow: () => invoke("updates:check"),
+  // Завантажити оновлення
+  download: () => invoke("updates:download"),
+  // Встановити і перезапустити
+  quitAndInstall: () => invoke("updates:install"),
 });
 
-// API сумісності
-contextBridge.exposeInMainWorld('api', {
-  appVersion: () => ipcRenderer.invoke('app:getVersion'),
-  license: { getStatus: () => ipcRenderer.invoke('license:getStatus') },
-  machineId: () => ipcRenderer.invoke('machine:getId'),
+// ICONV для перекодування тексту (CP866, CP1251, UTF-8 тощо)
+contextBridge.exposeInMainWorld("iconv", {
+  encode: (text, encoding) => {
+    if (!iconv) return null;
+    try {
+      return iconv.encode(text, encoding);
+    } catch (e) {
+      console.warn("iconv.encode error:", e);
+      return null;
+    }
+  },
+  decode: (buffer, encoding) => {
+    if (!iconv) return null;
+    try {
+      return iconv.decode(buffer, encoding);
+    } catch (e) {
+      console.warn("iconv.decode error:", e);
+      return null;
+    }
+  },
 });

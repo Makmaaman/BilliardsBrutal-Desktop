@@ -2,11 +2,378 @@
 <html lang="uk">
   <head>
     <meta charset="UTF-8" />
+    <title>Duna Billiard Club</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Billiards Brutal</title>
+    <meta name="color-scheme" content="dark" />
+    <style>
+      /* Базовий фон, щоб не було білого екрану */
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+          "Segoe UI", sans-serif;
+        background: radial-gradient(circle at 10% 0%, #064e3b 0, #020617 40%)
+          fixed;
+        color: #e5e7eb;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      #root {
+        position: relative;
+        isolation: isolate;
+        min-height: 100vh;
+      }
+
+      /* ===== SPLASH ===== */
+      #app-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background:
+          radial-gradient(circle at 0% 0%, rgba(16, 185, 129, 0.28), transparent 55%),
+          radial-gradient(circle at 120% 120%, rgba(15, 23, 42, 0.9), #020617);
+      }
+
+      #app-splash.splash-hide {
+        opacity: 0;
+        transform: scale(0.96);
+        pointer-events: none;
+        transition:
+          opacity 0.4s ease,
+          transform 0.4s ease;
+      }
+
+      .splash-card {
+        position: relative;
+        width: min(520px, 100%);
+        border-radius: 28px;
+        padding: 26px 28px 24px;
+        background: linear-gradient(
+          145deg,
+          rgba(6, 78, 59, 0.92),
+          rgba(15, 23, 42, 0.95)
+        );
+        box-shadow:
+          0 28px 80px rgba(0, 0, 0, 0.9),
+          0 0 0 1px rgba(15, 23, 42, 0.8);
+        overflow: hidden;
+      }
+
+      .splash-card::before {
+        content: "";
+        position: absolute;
+        inset: -40%;
+        background:
+          radial-gradient(circle at 0 0, rgba(52, 211, 153, 0.25), transparent 55%),
+          radial-gradient(circle at 120% 120%, rgba(15, 23, 42, 0.9), transparent 60%);
+        opacity: 0.9;
+        pointer-events: none;
+        mix-blend-mode: screen;
+      }
+
+      .splash-inner {
+        position: relative;
+        z-index: 1;
+      }
+
+      .splash-title {
+        font-size: 26px;
+        font-weight: 650;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #ecfdf5;
+      }
+
+      .splash-sub {
+        margin-top: 8px;
+        font-size: 14px;
+        color: #a7f3d0;
+        letter-spacing: 0.03em;
+        text-transform: uppercase;
+      }
+
+      .splash-row {
+        margin-top: 22px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .splash-loader-text {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 13px;
+        color: #d1fae5;
+      }
+
+      .splash-bar {
+        position: relative;
+        height: 6px;
+        width: 200px;
+        border-radius: 999px;
+        background: rgba(15, 118, 110, 0.6);
+        overflow: hidden;
+        box-shadow: 0 0 0 1px rgba(5, 46, 22, 0.7);
+      }
+
+      .splash-bar-fill {
+        position: absolute;
+        inset: 0;
+        transform-origin: 0 50%;
+        background-image: linear-gradient(
+          90deg,
+          rgba(52, 211, 153, 0.1),
+          rgba(16, 185, 129, 0.9),
+          rgba(45, 212, 191, 0.7),
+          rgba(16, 185, 129, 0.9),
+          rgba(52, 211, 153, 0.15)
+        );
+        animation: splash-bar-move 1.8s ease-in-out infinite;
+      }
+
+      @keyframes splash-bar-move {
+        0% {
+          transform: translateX(-60%) scaleX(0.4);
+        }
+        50% {
+          transform: translateX(8%) scaleX(1);
+        }
+        100% {
+          transform: translateX(120%) scaleX(0.4);
+        }
+      }
+
+      .splash-tip {
+        margin-top: 18px;
+        font-size: 12px;
+        color: #a7f3d0;
+        opacity: 0.9;
+      }
+
+      .splash-tip span {
+        opacity: 0.75;
+      }
+
+      /* === Куля + кий === */
+      .splash-ball-wrap {
+        position: relative;
+        width: 64px;
+        height: 64px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        overflow: visible;
+      }
+
+      .splash-ball-glow {
+        position: absolute;
+        inset: 8px;
+        border-radius: 999px;
+        background: radial-gradient(circle at 30% 8%, #ffffff, transparent 55%);
+        filter: blur(6px);
+        opacity: 0.85;
+      }
+
+      .splash-ball-orbit {
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        border: 2px solid rgba(52, 211, 153, 0.7);
+        box-shadow:
+          0 0 18px rgba(52, 211, 153, 0.7),
+          0 0 0 1px rgba(15, 23, 42, 0.9);
+        animation: splash-orbit 3s ease-in-out infinite;
+      }
+
+      @keyframes splash-orbit {
+        0% {
+          transform: rotate(0deg) scale(0.98);
+          opacity: 0.9;
+        }
+        50% {
+          transform: rotate(8deg) scale(1.04);
+          opacity: 1;
+        }
+        100% {
+          transform: rotate(-4deg) scale(0.98);
+          opacity: 0.9;
+        }
+      }
+
+      .splash-ball {
+        position: relative;
+        width: 44px;
+        height: 44px;
+        border-radius: 999px;
+        background: radial-gradient(circle at 30% 18%, #f9fafb, transparent 55%),
+          radial-gradient(circle at 70% 80%, #020617, #020617 70%, #111827 100%);
+        box-shadow:
+          inset 0 4px 9px rgba(255, 255, 255, 0.18),
+          0 5px 12px rgba(0, 0, 0, 0.85);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        animation: splash-ball-bounce 2.4s ease-in-out infinite;
+      }
+
+      @keyframes splash-ball-bounce {
+        0% {
+          transform: translate(0, 0) scale(1);
+        }
+        35% {
+          transform: translate(4px, -6px) scale(1.03);
+        }
+        100% {
+          transform: translate(0, 0) scale(1);
+        }
+      }
+
+      .splash-ball-inner {
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        background: radial-gradient(circle at 30% 0, #ffffff, #e5e7eb 55%);
+        box-shadow:
+          inset 0 2px 4px rgba(15, 23, 42, 0.7),
+          0 0 0 1px rgba(148, 163, 184, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .splash-ball-inner span {
+        font-size: 14px;
+        font-weight: 700;
+        color: #020617;
+      }
+
+      /* Кий */
+      .splash-cue {
+        position: absolute;
+        left: -56px;
+        top: 26px;
+        width: 86px;
+        height: 6px;
+        border-radius: 999px;
+        background: linear-gradient(
+          to right,
+          #78350f 0%,
+          #b45309 40%,
+          #facc15 75%,
+          #fefce8 100%
+        );
+        box-shadow:
+          0 0 10px rgba(0, 0, 0, 0.9),
+          0 0 0 1px rgba(0, 0, 0, 0.6);
+        transform-origin: 100% 50%;
+        animation: splash-cue-hit 2.4s ease-in-out infinite;
+      }
+
+      @keyframes splash-cue-hit {
+        0% {
+          transform: translateX(0) rotate(2deg);
+        }
+        30% {
+          transform: translateX(28px) rotate(0deg);
+        }
+        55% {
+          transform: translateX(-4px) rotate(-3deg);
+        }
+        100% {
+          transform: translateX(0) rotate(2deg);
+        }
+      }
+
+      @media (max-width: 480px) {
+        .splash-card {
+          padding: 22px 18px 18px;
+        }
+        .splash-title {
+          font-size: 22px;
+        }
+        .splash-row {
+          margin-top: 18px;
+          gap: 14px;
+        }
+        .splash-bar {
+          width: 160px;
+        }
+      }
+    </style>
   </head>
   <body>
+    <!-- SPLASH-екран -->
+    <div id="app-splash">
+      <div class="splash-card">
+        <div class="splash-inner">
+          <div class="splash-title">Duna Billiard Club</div>
+          <div class="splash-sub">Запуск системи керування столами…</div>
+
+          <div class="splash-row">
+            <div class="splash-ball-wrap" aria-hidden="true">
+              <div class="splash-ball-glow"></div>
+              <div class="splash-ball-orbit"></div>
+              <!-- кий -->
+              <div class="splash-cue"></div>
+              <!-- куля 8 -->
+              <div class="splash-ball">
+                <div class="splash-ball-inner">
+                  <span>8</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="splash-loader-text">
+              <div>Підключення до контролерів та сервісів…</div>
+              <div class="splash-bar">
+                <div class="splash-bar-fill"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="splash-tip">
+            <span>Порада:</span> додавайте гравців до столу — так легше відслідковувати
+            бонуси 🎯
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Точка входу React -->
     <div id="root"></div>
+
+    <!-- JS: автоматично сховати splash через ~15 секунд -->
+    <script>
+      (function () {
+        const splashStart = Date.now();
+
+        function hideSplash() {
+          const splash = document.getElementById("app-splash");
+          if (!splash) return;
+          splash.classList.add("splash-hide");
+          setTimeout(() => {
+            if (splash && splash.parentNode) {
+              splash.parentNode.removeChild(splash);
+            }
+          }, 450);
+        }
+
+        window.addEventListener("load", () => {
+          const elapsed = Date.now() - splashStart;
+          const total = 15000; // 15 секунд
+          const remaining = Math.max(0, total - elapsed);
+          setTimeout(hideSplash, remaining);
+        });
+      })();
+    </script>
+
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

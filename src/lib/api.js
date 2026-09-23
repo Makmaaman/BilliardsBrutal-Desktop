@@ -16,7 +16,11 @@ function genId(prefix = "id") {
  * Клієнти
  * ========================= */
 function customersList() { return lsGet(LS_CUSTOMERS, []); }
-function customersSave(list) { lsSet(LS_CUSTOMERS, list); }
+function customersSave(list) {
+  lsSet(LS_CUSTOMERS, list);
+  // сповіщаємо хук бронювань — він синхронізує клієнтів на booking-сервер
+  try { window.dispatchEvent(new Event("customers:changed")); } catch {}
+}
 
 function customersCreate(payload) {
   const list = customersList();

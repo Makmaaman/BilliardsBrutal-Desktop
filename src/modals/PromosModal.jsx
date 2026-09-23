@@ -1,6 +1,7 @@
 // src/modals/PromosModal.jsx
 import React from "react";
 import ModalShell from "../components/ModalShell";
+import { confirmAsync } from "../lib/confirm";
 import { api, formatMoney } from "../lib/api";
 import { input, select, tableWrap, table, th, td, btnPrimary, danger } from "../ui/classes";
 
@@ -58,7 +59,7 @@ export default function PromosModal({ onClose }) {
   }
 
   async function removePromo(id) {
-    if (!confirm("Видалити акцію?")) return;
+    if (!await confirmAsync("Видалити акцію?")) return;
     try {
       await api("promos:remove", { id });
       setList(v => v.filter(x => x.id !== id));
@@ -78,7 +79,7 @@ export default function PromosModal({ onClose }) {
   }
 
   return (
-    <ModalShell title="Акції" onClose={onClose} size="xl">
+    <ModalShell title="Акції" onClose={onClose} containerStyle={{ width: "980px", maxWidth: "92vw", height: "720px", maxHeight: "86vh" }}>
       {/* Форма створення */}
       <div className="grid grid-cols-1 md:grid-cols-12 gap-3">
         <input className={`${input} md:col-span-4`} placeholder="Назва акції" value={title} onChange={e=>setTitle(e.target.value)} />
@@ -89,8 +90,8 @@ export default function PromosModal({ onClose }) {
         <input className={`${input} md:col-span-2`} type="number" placeholder={type === "percent" ? "% знижки" : "Сума ₴"} value={value} onChange={e=>setValue(e.target.value)} />
         <input className={`${input} md:col-span-2`} type="number" placeholder="Мін. сума ₴" value={minAmount} onChange={e=>setMinAmount(e.target.value)} />
         <div className="md:col-span-2 flex items-center gap-2">
-          <input id="promo_active" type="checkbox" className="h-5 w-5 rounded border-zinc-300" checked={active} onChange={e=>setActive(e.target.checked)} />
-          <label htmlFor="promo_active" className="text-[15px] text-zinc-700">Активна</label>
+          <input id="promo_active" type="checkbox" className="h-5 w-5 rounded border-emerald-500/40 bg-slate-800" checked={active} onChange={e=>setActive(e.target.checked)} />
+          <label htmlFor="promo_active" className="text-[15px] text-emerald-100">Активна</label>
         </div>
         <input className={`${input} md:col-span-3`} type="date" value={validFrom} onChange={e=>setValidFrom(e.target.value)} />
         <input className={`${input} md:col-span-3`} type="date" value={validTo} onChange={e=>setValidTo(e.target.value)} />
@@ -160,25 +161,25 @@ export default function PromosModal({ onClose }) {
                 <td className={`${td} text-right space-x-2`}>
                   {editId === p.id ? (
                     <>
-                      <button className="rounded-xl bg-sky-600 hover:bg-sky-700 text-white px-3 py-2" onClick={saveEdit}>Зберегти</button>
-                      <button className="rounded-xl bg-zinc-100 text-zinc-700 px-3 py-2" onClick={()=>setEditId(null)}>Скасувати</button>
+                      <button className="rounded-xl bg-sky-600 hover:bg-sky-500 text-white px-3 py-2" onClick={saveEdit}>Зберегти</button>
+                      <button className="rounded-xl bg-slate-700 text-emerald-100 px-3 py-2 hover:bg-slate-600" onClick={()=>setEditId(null)}>Скасувати</button>
                     </>
                   ) : (
                     <>
-                      <button className="rounded-xl bg-sky-600 hover:bg-sky-700 text-white px-3 py-2" onClick={() => { setEditId(p.id); setEdit({ title:p.title||"", type:p.type||"percent", value:p.value||0, minAmount:p.minAmount||0, active:!!p.active, validFrom:p.validFrom||"", validTo:p.validTo||"" }); }}>Редагувати</button>
+                      <button className="rounded-xl bg-sky-600 hover:bg-sky-500 text-white px-3 py-2" onClick={() => { setEditId(p.id); setEdit({ title:p.title||"", type:p.type||"percent", value:p.value||0, minAmount:p.minAmount||0, active:!!p.active, validFrom:p.validFrom||"", validTo:p.validTo||"" }); }}>Редагувати</button>
                       <button className={danger} onClick={() => removePromo(p.id)}>Видалити</button>
                     </>
                   )}
                 </td>
               </tr>
             ))}
-            {!list.length && (<tr><td className={`${td} text-zinc-500`} colSpan={7}>Немає акцій…</td></tr>)}
+            {!list.length && (<tr><td className={`${td} text-emerald-200/60`} colSpan={7}>Немає акцій…</td></tr>)}
           </tbody>
         </table>
       </div>
 
       <div className="flex justify-end">
-        <button className="rounded-xl bg-zinc-900 text-white px-5 py-2" onClick={onClose}>Готово</button>
+        <button className="rounded-xl bg-emerald-600 text-white px-5 py-2 hover:bg-emerald-500" onClick={onClose}>Готово</button>
       </div>
     </ModalShell>
   );

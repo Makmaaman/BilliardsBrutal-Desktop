@@ -1,0 +1,176 @@
+/* ============================================
+ * Modal Shell Overrides - Стилі для модалок
+ * ============================================ */
+
+/* Скроллбари всередині модалок — м'які emerald */
+.modal-shell-dialog *::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.modal-shell-dialog *::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.modal-shell-dialog *::-webkit-scrollbar-thumb {
+  background-color: rgba(52, 211, 153, 0.4); /* emerald-500/40 */
+  border-radius: 9999px;
+}
+
+.modal-shell-dialog *::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(52, 211, 153, 0.6); /* emerald-500/60 */
+}
+
+/* Для браузерів з scrollbar-color */
+.modal-shell-dialog {
+  scrollbar-color: rgba(52, 211, 153, 0.4) transparent;
+  scrollbar-width: thin;
+}
+
+/* ============================================
+ * БІЛІ СЕКЦІЇ (bg-white, bg-slate-50, etc.)
+ * Темний текст для читабельності
+ * ============================================ */
+
+/* Базовий темний колір для всіх елементів у білих секціях */
+/* Включаємо варіанти з opacity (bg-white/95, bg-slate-50/80 тощо) */
+.modal-shell-dialog .bg-white,
+.modal-shell-dialog .bg-white *,
+.modal-shell-dialog [class*="bg-white\/"],
+.modal-shell-dialog [class*="bg-white\/"] *,
+.modal-shell-dialog .bg-slate-50,
+.modal-shell-dialog .bg-slate-50 *,
+.modal-shell-dialog [class*="bg-slate-50\/"],
+.modal-shell-dialog [class*="bg-slate-50\/"] * {
+  color: #1e293b; /* slate-800 */
+}
+
+/* Світлі поля вводу всередині білих карточок */
+.modal-shell-dialog .bg-white input,
+.modal-shell-dialog .bg-white select,
+.modal-shell-dialog .bg-white textarea,
+.modal-shell-dialog [class*="bg-white\/"] input,
+.modal-shell-dialog [class*="bg-white\/"] select,
+.modal-shell-dialog [class*="bg-white\/"] textarea,
+.modal-shell-dialog .bg-slate-50 input,
+.modal-shell-dialog .bg-slate-50 select,
+.modal-shell-dialog .bg-slate-50 textarea,
+.modal-shell-dialog [class*="bg-slate-50\/"] input,
+.modal-shell-dialog [class*="bg-slate-50\/"] select,
+.modal-shell-dialog [class*="bg-slate-50\/"] textarea {
+  background-color: #f8fafc !important;
+  color: #0f172a !important;
+  border-radius: 9999px;
+  border: 1px solid #d4d4d8;
+  font-size: 13px;
+}
+
+/* placeholder для світлих полів */
+.modal-shell-dialog .bg-white input::placeholder,
+.modal-shell-dialog .bg-white textarea::placeholder,
+.modal-shell-dialog .bg-slate-50 input::placeholder,
+.modal-shell-dialog .bg-slate-50 textarea::placeholder {
+  color: #94a3b8 !important;
+}
+
+/* Специфічні кольори тексту в білих секціях */
+.modal-shell-dialog .bg-white .text-slate-500,
+.modal-shell-dialog [class*="bg-white\/"] .text-slate-500,
+.modal-shell-dialog .bg-slate-50 .text-slate-500,
+.modal-shell-dialog [class*="bg-slate-50\/"] .text-slate-500 {
+  color: #64748b !important;
+}
+
+.modal-shell-dialog .bg-white .text-slate-600,
+.modal-shell-dialog [class*="bg-white\/"] .text-slate-600,
+.modal-shell-dialog .bg-slate-50 .text-slate-600,
+.modal-shell-dialog [class*="bg-slate-50\/"] .text-slate-600 {
+  color: #475569 !important;
+}
+
+.modal-shell-dialog .bg-white .text-slate-700,
+.modal-shell-dialog [class*="bg-white\/"] .text-slate-700,
+.modal-shell-dialog .bg-slate-50 .text-slate-700,
+.modal-shell-dialog [class*="bg-slate-50\/"] .text-slate-700 {
+  color: #334155 !important;
+}
+
+.modal-shell-dialog .bg-white .text-slate-800,
+.modal-shell-dialog [class*="bg-white\/"] .text-slate-800,
+.modal-shell-dialog .bg-slate-50 .text-slate-800,
+.modal-shell-dialog [class*="bg-slate-50\/"] .text-slate-800 {
+  color: #1e293b !important;
+}
+
+/* Кольорові акценти в білих секціях */
+.modal-shell-dialog .bg-white .text-white,
+.modal-shell-dialog .bg-slate-50 .text-white { color: #ffffff !important; }
+
+.modal-shell-dialog .bg-white .text-emerald-700,
+.modal-shell-dialog .bg-slate-50 .text-emerald-700 { color: #047857 !important; }
+
+.modal-shell-dialog .bg-white .text-emerald-600,
+.modal-shell-dialog .bg-slate-50 .text-emerald-600 { color: #059669 !important; }
+
+.modal-shell-dialog .bg-white .text-rose-600,
+.modal-shell-dialog .bg-slate-50 .text-rose-600 { color: #e11d48 !important; }
+
+.modal-shell-dialog .bg-white .text-rose-700,
+.modal-shell-dialog .bg-slate-50 .text-rose-700 { color: #be123c !important; }
+
+.modal-shell-dialog .bg-white .text-sky-700,
+.modal-shell-dialog .bg-slate-50 .text-sky-700 { color: #0369a1 !important; }
+
+.modal-shell-dialog .bg-white .text-amber-700,
+.modal-shell-dialog .bg-slate-50 .text-amber-700 { color: #b45309 !important; }
+
+.modal-shell-dialog .bg-white .text-amber-900,
+.modal-shell-dialog .bg-slate-50 .text-amber-900 { color: #78350f !important; }
+
+/* ============================================
+ * ІНШІ СВІТЛІ СЕКЦІЇ (emerald-50, amber-50, etc.)
+ * ============================================ */
+
+.modal-shell-dialog .bg-emerald-50,
+.modal-shell-dialog .bg-emerald-50 *,
+.modal-shell-dialog .bg-amber-50,
+.modal-shell-dialog .bg-amber-50 *,
+.modal-shell-dialog .bg-sky-50,
+.modal-shell-dialog .bg-sky-50 *,
+.modal-shell-dialog .bg-rose-50,
+.modal-shell-dialog .bg-rose-50 * {
+  color: #1e293b; /* slate-800 */
+}
+
+.modal-shell-dialog .bg-emerald-50 .text-slate-500,
+.modal-shell-dialog .bg-amber-50 .text-slate-500,
+.modal-shell-dialog .bg-sky-50 .text-slate-500,
+.modal-shell-dialog .bg-rose-50 .text-slate-500 {
+  color: #64748b !important;
+}
+
+.modal-shell-dialog .bg-emerald-50 .text-slate-600,
+.modal-shell-dialog .bg-amber-50 .text-slate-600,
+.modal-shell-dialog .bg-sky-50 .text-slate-600,
+.modal-shell-dialog .bg-rose-50 .text-slate-600 {
+  color: #475569 !important;
+}
+
+/* Специфічні кольори для amber секцій */
+.modal-shell-dialog .bg-amber-50 .text-amber-700 { color: #b45309 !important; }
+.modal-shell-dialog .bg-amber-50 .text-amber-900 { color: #78350f !important; }
+
+/* Специфічні кольори для emerald секцій */
+.modal-shell-dialog .bg-emerald-50 .text-emerald-700 { color: #047857 !important; }
+.modal-shell-dialog .bg-emerald-50 .text-emerald-800 { color: #065f46 !important; }
+.modal-shell-dialog .bg-emerald-50 .text-emerald-900 { color: #064e3b !important; }
+
+/* Специфічні кольори для rose секцій */
+.modal-shell-dialog .bg-rose-50 .text-rose-600 { color: #e11d48 !important; }
+.modal-shell-dialog .bg-rose-50 .text-rose-700 { color: #be123c !important; }
+
+/* тонкий скролбар у модалках (Налаштування, списки) */
+.custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+.custom-scrollbar::-webkit-scrollbar-track { background: rgba(2, 44, 34, 0.35); border-radius: 8px; }
+.custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(16, 185, 129, 0.35); border-radius: 8px; }
+.custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(16, 185, 129, 0.55); }
