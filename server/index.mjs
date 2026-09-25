@@ -101,6 +101,40 @@ async function getOrder(id) {
   }
 }
 
+/** Перепитати монобанк по недавніх замовленнях машини і знайти оплачене. */
+async function findPaidOrderViaMono(machineId) {
+  let rows = [];
+  try {
+    const r = await query(
+      `SELECT * FROM orders
+        WHERE machine_id = $1 AND status <> 'PAID' AND invoice_id IS NOT NULL
+        ORDER BY created_at DESC LIMIT 10`,
+      [machineId]
+    );
+    rows = r.rows;
+  } catch (e) {
+    console.error("[RESTORE_LOOKUP_FAILED]", machineId, e.message);
+    return null;
+  }
+
+  for (const row of rows) {
+    const rec = rowToOrder(row);
+    try {
+      const st = await monoCheckInvoice(rec.invoiceId);
+      const { paid, status } = invoicePaidInfo(st, uahToKop(rec.amount));
+      console.log("[RESTORE_CHECK]", { id: rec.id, invoice: rec.invoiceId, status, paid });
+      if (paid) {
+        rec.status = "PAID";
+        await saveOrder(rec);
+        return rec;
+      }
+    } catch (e) {
+      console.warn("[RESTORE_CHECK_FAILED]", rec.invoiceId, e.message);
+    }
+  }
+  return null;
+}
+
 /** Останнє оплачене замовлення для машини (для відновлення ліцензії). */
 async function getPaidOrderForMachine(machineId) {
   try {
@@ -183,6 +217,26 @@ async function monoCheckInvoice(invoiceId) {
     throw new Error(`Mono status failed: ${res.status} ${txt}`);
   }
   return await res.json();
+}
+
+/**
+ * Чи оплачений рахунок за відповіддю монобанку.
+ *
+ * Раніше код читав st.paidAmount — такого поля в API немає (є amount і
+ * finalAmount), тому Number(undefined) давав 0, умова «сплачено менше
+ * очікуваного» спрацьовувала завжди, і ліцензія не видавалась навіть при
+ * status === "success".
+ */
+function invoicePaidInfo(st, expectedKop) {
+  const status = String((st && st.status) || "").toLowerCase();
+  const paidAmount = Number(
+    (st && (st.finalAmount ?? st.amount ?? st.paidAmount)) || 0
+  );
+  // сума в монобанку вже в копійках; якщо її з якоїсь причини немає —
+  // довіряємо статусу "success"
+  const enough = paidAmount > 0 ? paidAmount >= expectedKop : true;
+  const paid = status === "success" && enough;
+  return { status, paidAmount, paid };
 }
 
 // ---------- ROUTES: базові / ліцензія ----------
@@ -297,18 +351,18 @@ async function handleOrderRefresh(req, res) {
         .json({ ok: false, error: "ORDER_NOT_FOUND" });
 
     const st = await monoCheckInvoice(rec.invoiceId);
-    const status = (st.status || "").toLowerCase();
-    const paidAmount = Number(st.paidAmount || 0);
     const expectedKop = uahToKop(rec.amount);
+    const { status, paidAmount, paid } = invoicePaidInfo(st, expectedKop);
 
     console.log("[ORDER_STATUS]", {
       id,
       status,
       paidAmount,
       expectedKop,
+      paid,
     });
 
-    if (paidAmount < expectedKop) {
+    if (!paid) {
       rec.status = status || "WAITING";
       await saveOrder(rec);
       return res.json({
@@ -377,11 +431,11 @@ app.post("/api/license/activate", async (req, res) => {
       if (rec.status !== "PAID") {
         try {
           const st = await monoCheckInvoice(rec.invoiceId);
-          const paidAmount = Number(st.paidAmount || 0);
-          if (paidAmount < uahToKop(rec.amount)) {
+          const { status, paid } = invoicePaidInfo(st, uahToKop(rec.amount));
+          if (!paid) {
             return res
               .status(402)
-              .json({ ok: false, error: "ORDER_NOT_PAID", status: st.status || rec.status });
+              .json({ ok: false, error: "ORDER_NOT_PAID", status: status || rec.status });
           }
           rec.status = "PAID";
         } catch (e) {
@@ -429,7 +483,12 @@ app.post("/api/license/restore", async (req, res) => {
         .status(400)
         .json({ ok: false, error: "MISSING_MACHINE_ID" });
 
-    const rec = await getPaidOrderForMachine(machineId);
+    let rec = await getPaidOrderForMachine(machineId);
+
+    // Замовлення могло лишитись у статусі monobank ("success", "created"...),
+    // якщо його жодного разу не перевіряли після оплати — перепитуємо банк.
+    if (!rec) rec = await findPaidOrderViaMono(machineId);
+
     if (!rec)
       return res
         .status(404)
